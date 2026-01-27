@@ -19,4 +19,6 @@ model Order {
   totalPrice  Float
   source      String
   createdAt   DateTime @default(now())
+  status      String   @default("")
+  @@unique([orderId, source])
 }
