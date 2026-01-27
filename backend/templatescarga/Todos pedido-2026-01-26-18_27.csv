@@ -1,0 +1,91 @@
+﻿Order ID,Package ID,Order Status,Order Substatus,Cancelation/Return Type,Normal or Pre-order,SKU ID,Seller SKU,Product Name,Variation,Product Category,Quantity,Sku Quantity of return,SKU Unit Original Price,SKU Subtotal Before Discount,SKU Platform Discount,SKU Seller Discount,SKU Subtotal After Discount,Shipping Fee After Discount,Original Shipping Fee,Shipping Fee Seller Discount,Shipping Fee Platform Discount,Payment platform discount,Order Amount,Payment Method,Order Refund Amount,Cancel By,Cancel Reason,Created Time,Paid Time,RTS Time,Shipped Time,Delivered Time,Cancelled Time,Fulfillment Type,Warehouse Name,Tracking ID,Delivery Option Type,Delivery Option,Weight(kg),Shipping Provider Name,Buyer Username,CPF Number,CPF Name,Recipient,Phone #,Street Name,Street Number,Neighborhood,House Name or Number,City,State,Country,Zipcode,Shipping Information,Invoice Status,Buyer Message,Seller Note
+582293032221967670	,"	",Cancelado,Cancelado,Cancel,Normal,1734118746835945023	,,Calça Legging Fitness Empina Bumbum Modeladora Cós V,Vermelha,Leggings esportivos,1,1,"BRL 159,99","BRL 159,99","BRL 10,00","BRL 40,00","BRL 109,99","BRL 18,08","BRL 38,08","BRL 0,00","BRL 20,00",,"BRL 128,07",Pix,"BRL 109,99",System,Pagamento atrasado por parte do cliente,01/25/2026 6:20:43 PM	,"	","	","	","	",01/26/2026 6:20:46 PM	,Fulfillment by seller,Principal - Patamares,,Shipped via platform,Entrega padrão,0.3,,simara.santos.mor1,01896510590	,SIMARA SANTOS MOREIRA DE LACERDA,S***** s***** M****** d* L****,(+55)119******00,***************,**,******,***************,Carapicuíba,SP,Brasil,********	,"S***** s***** M****** d* L****
+(+55)119******00
+*************** ** ****** ***************
+Carapicuíba, SP
+********
+Brasil",,,
+582278870808364244	,1183673313245889748	,Enviado,Em trânsito,,Normal,1734163830644704831	,,Macaquinho Fitness Empina Bumbum Wave,Branco,Calções esportivos,1,0,"BRL 169,99","BRL 169,99","BRL 10,00","BRL 20,40","BRL 139,59","BRL 8,69","BRL 28,69","BRL 0,00","BRL 20,00",,"BRL 148,28",Pix,,,,01/24/2026 11:15:32 PM	,01/24/2026 11:16:10 PM	,01/25/2026 2:25:05 PM	,01/26/2026 12:27:57 PM	,"	","	",Fulfillment by seller,Principal - Patamares,AN518756995BR,Shipped via platform,Entrega padrão,0.3,Correios,apmlocacoes,02287850490	,ALUISIO PONTUAL MORAES,APM Locações,(+55)819******19,Estrada de Aldeia,12000,Aldeia dos Camarás,Sete Casuarinas Casa 19 Manga,Camaragibe,PE,Brasil,54786001	,"APM Locações
+(+55)819******19
+Estrada de Aldeia 12000 Aldeia dos Camarás Sete Casuarinas Casa 19 Manga
+Camaragibe, PE
+54786001
+Brasil",NF-e valid,,
+582273988944496293	,1183658571569989285	,Cancelado,Cancelado,Cancel,,1734087739199686207	,,Calça Legging Fitness Empina Bumbum Premium,Preto,Leggings esportivos,1,1,"BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00",,"BRL 0,00",,"BRL 0,00",Seller,O comprador solicitou o cancelamento,01/24/2026 6:53:03 PM	,01/24/2026 6:53:03 PM	,01/25/2026 6:29:40 PM	,"	","	",01/26/2026 3:16:53 PM	,Fulfillment by seller,Principal - Patamares,AN519154489BR,Shipped via platform,Entrega padrão,0.3,Correios,joanafigueiredo.eu,01641855690	,Joana DArc  Santos Figueiredo,J**** F*********,(+55)319******93,**************************,***,*******,***************,Belo Horizonte,MG,Brasil,********	,"J**** F*********
+(+55)319******93
+************************** *** ******* ***************
+Belo Horizonte, MG
+********
+Brasil",NF-e error,,
+582273988944496293	,1183658571569989285	,Cancelado,Cancelado,Cancel,,1734118266145310271	,643,Macacão Empina Bumbum Wave Branco,Padrão,Leggings esportivos,1,1,"BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00","BRL 0,00",,"BRL 0,00",,"BRL 0,00",Seller,O comprador solicitou o cancelamento,01/24/2026 6:53:03 PM	,01/24/2026 6:53:03 PM	,01/25/2026 6:29:40 PM	,"	","	",01/26/2026 3:16:53 PM	,Fulfillment by seller,Principal - Patamares,AN519154489BR,Shipped via platform,Entrega padrão,0.3,Correios,joanafigueiredo.eu,01641855690	,Joana DArc  Santos Figueiredo,J**** F*********,(+55)319******93,**************************,***,*******,***************,Belo Horizonte,MG,Brasil,********	,"J**** F*********
+(+55)319******93
+************************** *** ******* ***************
+Belo Horizonte, MG
+********
+Brasil",NF-e error,,
+582276178839897428	,1183654891924850004	,Enviado,Em trânsito,,Normal,1734118760415921727	,,Calça Legging Fitness Empina Bumbum Modeladora Cós V,Preta,Leggings esportivos,1,0,"BRL 159,99","BRL 159,99","BRL 0,00","BRL 40,00","BRL 119,99","BRL 8,69","BRL 28,69","BRL 0,00","BRL 20,00",,"BRL 128,68",Parcelamento de cartão de crédito,,,,01/24/2026 3:22:47 PM	,01/24/2026 3:22:54 PM	,01/25/2026 2:25:05 PM	,01/26/2026 12:29:16 PM	,"	","	",Fulfillment by seller,Principal - Patamares,AN518757015BR,Shipped via platform,Entrega padrão,0.3,Correios,adrianagomessanto1,12905817704	,ADRIANA CONCEICAO MUNIZ DE MEDEIROS GOMES,Adriana Gomes Santos,(+55)279******19,Rua Pedro Machado da Silva,15,Industrial,casa,Viana,ES,Brasil,29135572	,"Adriana Gomes Santos
+(+55)279******19
+Rua Pedro Machado da Silva 15 Industrial casa
+Viana, ES
+29135572
+Brasil",NF-e valid,,
+582275758778976133	,1183652636088436613	,Enviado,Em trânsito,,Normal,1734087739199686207	,,Calça Legging Fitness Empina Bumbum Premium,Preto,Leggings esportivos,1,0,"BRL 159,99","BRL 159,99","BRL 3,33","BRL 32,00","BRL 124,66","BRL 2,47","BRL 22,47","BRL 0,00","BRL 20,00",,"BRL 376,44",Parcelamento de cartão de crédito,,,,01/24/2026 2:16:21 PM	,01/24/2026 2:16:26 PM	,01/25/2026 2:25:05 PM	,01/26/2026 12:28:25 PM	,"	","	",Fulfillment by seller,Principal - Patamares,AN518756981BR,Shipped via platform,Entrega padrão,0.3,Correios,robson.gorjo,32894252587	,ROBSON DE SOUZA GORJAO,ROBSON GORJÃO,(+55)719******41,Rua Rio de São Pedro,16,Graça,Apt 1001,Salvador,BA,Brasil,40150350	,"ROBSON GORJÃO
+(+55)719******41
+Rua Rio de São Pedro 16 Graça Apt 1001
+Salvador, BA
+40150350
+Brasil",NF-e valid,,
+582275758778976133	,1183652636088436613	,Enviado,Em trânsito,,Normal,1734087739199948351	,,Calça Legging Fitness Empina Bumbum Premium,Off White,Leggings esportivos,1,0,"BRL 159,99","BRL 159,99","BRL 3,34","BRL 32,00","BRL 124,65","BRL 2,47","BRL 22,47","BRL 0,00","BRL 20,00",,"BRL 376,44",Parcelamento de cartão de crédito,,,,01/24/2026 2:16:21 PM	,01/24/2026 2:16:26 PM	,01/25/2026 2:25:05 PM	,01/26/2026 12:28:25 PM	,"	","	",Fulfillment by seller,Principal - Patamares,AN518756981BR,Shipped via platform,Entrega padrão,0.3,Correios,robson.gorjo,32894252587	,ROBSON DE SOUZA GORJAO,ROBSON GORJÃO,(+55)719******41,Rua Rio de São Pedro,16,Graça,Apt 1001,Salvador,BA,Brasil,40150350	,"ROBSON GORJÃO
+(+55)719******41
+Rua Rio de São Pedro 16 Graça Apt 1001
+Salvador, BA
+40150350
+Brasil",NF-e valid,,
+582275758778976133	,1183652636088436613	,Enviado,Em trânsito,,Normal,1734087739200013887	,,Calça Legging Fitness Empina Bumbum Premium,Acai,Leggings esportivos,1,0,"BRL 159,99","BRL 159,99","BRL 3,33","BRL 32,00","BRL 124,66","BRL 2,47","BRL 22,47","BRL 0,00","BRL 20,00",,"BRL 376,44",Parcelamento de cartão de crédito,,,,01/24/2026 2:16:21 PM	,01/24/2026 2:16:26 PM	,01/25/2026 2:25:05 PM	,01/26/2026 12:28:25 PM	,"	","	",Fulfillment by seller,Principal - Patamares,AN518756981BR,Shipped via platform,Entrega padrão,0.3,Correios,robson.gorjo,32894252587	,ROBSON DE SOUZA GORJAO,ROBSON GORJÃO,(+55)719******41,Rua Rio de São Pedro,16,Graça,Apt 1001,Salvador,BA,Brasil,40150350	,"ROBSON GORJÃO
+(+55)719******41
+Rua Rio de São Pedro 16 Graça Apt 1001
+Salvador, BA
+40150350
+Brasil",NF-e valid,,
+582274939621574146	,1183649544094909954	,Enviado,Em trânsito,,Normal,1734087739199686207	,,Calça Legging Fitness Empina Bumbum Premium,Preto,Leggings esportivos,1,0,"BRL 159,99","BRL 159,99","BRL 0,00","BRL 32,00","BRL 127,99","BRL 59,46","BRL 79,46","BRL 0,00","BRL 20,00",,"BRL 187,45",Pix,,,,01/24/2026 12:55:02 PM	,01/24/2026 12:57:01 PM	,01/25/2026 2:25:05 PM	,01/26/2026 12:29:15 PM	,"	","	",Fulfillment by seller,Principal - Patamares,AN518757001BR,Shipped via platform,Entrega padrão,0.3,Correios,francisca.maria.r763,70063334151	,FRANCISCA MARIA RUFINO RESENE,Francisca Maria Resene,(+55)649******19,Rua Professor Percival Rebelo,s/n,Setor Norte,restaurante casarão,Piracanjuba,GO,Brasil,75643092	,"Francisca Maria Resene
+(+55)649******19
+Rua Professor Percival Rebelo s/n Setor Norte restaurante casarão
+Piracanjuba, GO
+75643092
+Brasil",NF-e valid,,
+582274897429431810	,"	",Cancelado,Cancelado,Cancel,Normal,1734087739199686207	,,Calça Legging Fitness Empina Bumbum Premium,Preto,Leggings esportivos,1,1,"BRL 159,99","BRL 159,99","BRL 0,00","BRL 32,00","BRL 127,99","BRL 59,46","BRL 79,46","BRL 0,00","BRL 20,00",,"BRL 187,45",Pix,"BRL 127,99",System,Pagamento atrasado por parte do cliente,01/24/2026 12:51:52 PM	,"	","	","	","	",01/25/2026 12:51:54 PM	,Fulfillment by seller,Principal - Patamares,,Shipped via platform,Entrega padrão,0.3,,francisca.maria.r763,70063334151	,FRANCISCA MARIA RUFINO RESENE,F******** M**** R*****,(+55)649******19,*****************************,***,***********,*******************,Piracanjuba,GO,Brasil,********	,"F******** M**** R*****
+(+55)649******19
+***************************** *** *********** *******************
+Piracanjuba, GO
+********
+Brasil",,,
+582274600126809337	,1183647780878910713	,Enviado,Em trânsito,,Normal,1734087739199686207	,,Calça Legging Fitness Empina Bumbum Premium,Preto,Leggings esportivos,1,0,"BRL 159,99","BRL 159,99","BRL 0,00","BRL 32,00","BRL 127,99","BRL 11,91","BRL 31,91","BRL 0,00","BRL 20,00",,"BRL 139,90",Pix,,,,01/24/2026 12:28:50 PM	,01/24/2026 12:29:38 PM	,01/25/2026 2:25:05 PM	,01/26/2026 12:29:16 PM	,"	","	",Fulfillment by seller,Principal - Patamares,AN518757029BR,Shipped via platform,Entrega padrão,0.3,Correios,vera.bittencourt70,76840611787	,VERA LUCIA BITTENCOURT DE OLIVEIRA,Vera Bittencourt,(+55)219******90,Rua Cândido Benício,850,Campinho,apt 305,Rio de Janeiro,RJ,Brasil,21320060	,"Vera Bittencourt
+(+55)219******90
+Rua Cândido Benício 850 Campinho apt 305
+Rio de Janeiro, RJ
+21320060
+Brasil",NF-e valid,,
+582274530389886498	,"	",Cancelado,Cancelado,Cancel,Normal,1734118760415856191	,,Calça Legging Fitness Empina Bumbum Modeladora Cós V,Branca,Leggings esportivos,1,1,"BRL 159,99","BRL 159,99","BRL 0,00","BRL 40,00","BRL 119,99","BRL 39,46","BRL 59,46","BRL 0,00","BRL 20,00",,"BRL 159,45",Pix,"BRL 119,99",System,Pagamento atrasado por parte do cliente,01/24/2026 12:26:21 PM	,"	","	","	","	",01/25/2026 12:26:24 PM	,Fulfillment by seller,Principal - Patamares,,Shipped via platform,Entrega padrão,0.3,,www.tictocguilwrme,11091992797	,ROSEMAR SOARES DA FONSECA,R***,(+55)229******12,***************************,***,*************,******************,São Pedro da Aldeia,RJ,Brasil,********	,"R***
+(+55)229******12
+*************************** *** ************* ******************
+São Pedro da Aldeia, RJ
+********
+Brasil",,,
+582273484623283691	,1183643708796995051	,Enviado,Em trânsito,,Normal,1734118266145310271	,643,Macacão Empina Bumbum Wave Branco,Padrão,Leggings esportivos,1,0,"BRL 199,99","BRL 199,99","BRL 0,00","BRL 0,00","BRL 199,99","BRL 0,00","BRL 26,12","BRL 0,00","BRL 26,12",,"BRL 199,99",Pix,,,,01/24/2026 11:17:41 AM	,01/24/2026 11:18:14 AM	,01/25/2026 2:25:06 PM	,01/26/2026 12:29:33 PM	,"	","	",Fulfillment by seller,Principal - Patamares,AN518757050BR,Shipped via platform,Entrega padrão,0.3,Correios,noronhamonik,05151301500	,MONIQUE DE SOUZA NORONHA,user5731532373040,(+55)799******85,Praça São João,240,Centro,Praça São João,Pedrinhas,SE,Brasil,49350000	,"user5731532373040
+(+55)799******85
+Praça São João 240 Centro Praça São João
+Pedrinhas, SE
+49350000
+Brasil",NF-e valid,,
+582269709451822092	,1183622922420978700	,Enviado,Em trânsito,,Normal,1734087739200013887	,,Calça Legging Fitness Empina Bumbum Premium,Acai,Leggings esportivos,1,0,"BRL 159,99","BRL 159,99","BRL 10,00","BRL 32,00","BRL 117,99","BRL 24,08","BRL 38,08","BRL 0,00","BRL 14,00",,"BRL 142,07",Parcelamento de cartão de crédito,,,,01/24/2026 7:02:23 AM	,01/24/2026 7:02:27 AM	,01/24/2026 10:04:28 AM	,01/26/2026 2:07:39 PM	,"	","	",Fulfillment by seller,Principal - Patamares,AN516463747BR,Shipped via platform,Entrega padrão,0.3,Correios,user1jafcn48yh,76308197149	,VILMA TENORIO DA SILVA,Vilma Tenório da Silva,(+55)679******01,Av Julia Maksoud,593,Monte Castelo,"ap 12, bloco a7",Campo Grande,MS,Brasil,79011100	,"Vilma Tenório da Silva
+(+55)679******01
+Av Julia Maksoud 593 Monte Castelo ap 12, bloco a7
+Campo Grande, MS
+79011100
+Brasil",NF-e valid,,
+582247089198433895	,1183448798357915239	,Enviado,Em trânsito,,Normal,1734087739200013887	,,Calça Legging Fitness Empina Bumbum Premium,Acai,Leggings esportivos,1,0,"BRL 159,99","BRL 159,99","BRL 10,00","BRL 32,00","BRL 117,99","BRL 18,08","BRL 38,08","BRL 0,00","BRL 20,00",,"BRL 136,07",Pix,,,,01/22/2026 10:02:05 PM	,01/22/2026 10:02:52 PM	,01/23/2026 11:18:13 AM	,01/23/2026 1:23:02 PM	,"	","	",Fulfillment by seller,Principal - Patamares,AN513149843BR,Shipped via platform,Entrega padrão,0.3,Correios,leandro.auricchio,12513648889	,LEANDRO AURICCHIO,Leandro Auricchio,(+55)119******71,Rua Catarina Braida,359,Mooca,Ap 91 torre 3,São Paulo,SP,Brasil,03169030	,"Leandro Auricchio
+(+55)119******71
+Rua Catarina Braida 359 Mooca Ap 91 torre 3
+São Paulo, SP
+03169030
+Brasil",NF-e valid,,

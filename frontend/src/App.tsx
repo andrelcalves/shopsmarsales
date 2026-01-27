@@ -20,7 +20,8 @@ interface Sale {
 function App() {
   // Estado para o formulário de upload
   const [file, setFile] = useState<File | null>(null);
-  const [source, setSource] = useState<'shopee' | 'tiktok' | 'site'>('shopee');
+  // Removido 'site' e mantido 'tiktok' como valor interno
+  const [source, setSource] = useState<'shopee' | 'tiktok'>('shopee');
   const [message, setMessage] = useState('');
 
   // Estado para a lista de vendas
@@ -91,18 +92,41 @@ function App() {
     <div className="App">
       <header className="App-header">
         <h1>Consolidador de Vendas</h1>
-        <form onSubmit={handleSubmit}>
-          {/* ... formulário de upload ... */}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center' }}>
+          <div>
+            <label htmlFor="source-select" style={{ marginRight: '10px' }}>Canal de Venda:</label>
+            <select
+              id="source-select"
+              value={source}
+              onChange={(e) => setSource(e.target.value as any)}
+              style={{ padding: '5px' }}
+            >
+              <option value="shopee">Shopee</option>
+              <option value="tiktok">TikTok Shop</option>
+            </select>
+          </div>
+          
+          <div>
+            <input 
+              type="file" 
+              onChange={handleFileChange} 
+              accept=".csv, .xlsx, .xls"
+            />
+          </div>
+
+          <button type="submit" disabled={!file} style={{ padding: '10px 20px', cursor: 'pointer' }}>
+            Enviar Arquivo
+          </button>
         </form>
         {message && <p>{message}</p>}
 
-        <hr />
+        <hr style={{ width: '100%', margin: '20px 0' }} />
 
         <h2>Dashboard de Vendas Consolidadas</h2>
         {loading ? (
           <p>Carregando dados...</p>
         ) : (
-          <table>
+          <table border={1} cellPadding="5" style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr>
                 <th>Data</th>

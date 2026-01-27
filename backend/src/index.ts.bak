@@ -1,0 +1,212 @@
+// src/index.ts (versão instrumentada de diagnóstico)
+import 'source-map-support/register';
+import express from 'express';
+import cors from 'cors';
+import formidable from 'formidable';
+import * as xlsx from 'xlsx';
+import { PrismaClient } from '@prisma/client';
+import fs from 'fs';
+import path from 'path';
+import util from 'util';
+
+const APP_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 4000;
+const prismaClientPath = path.join(process.cwd(), 'node_modules', '.prisma', 'client');
+
+function prettyInspect(obj: any) {
+  return util.inspect(obj, { depth: 6, colors: false, breakLength: 120 });
+}
+
+process.on('uncaughtException', (err) => {
+  console.error('--- uncaughtException ---');
+  if (err && (err as any).stack) {
+    console.error((err as any).stack);
+  } else {
+    console.error('Thrown object (util.inspect):', prettyInspect(err));
+    try {
+      console.error('Thrown object (JSON):', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
+    } catch (e) {
+      console.error('JSON serialize failed:', e);
+    }
+  }
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('--- unhandledRejection ---');
+  console.error('Reason (util.inspect):', prettyInspect(reason));
+  try {
+    console.error('Reason (JSON):', JSON.stringify(reason, Object.getOwnPropertyNames(reason), 2));
+  } catch (e) {
+    console.error('JSON serialize failed:', e);
+  }
+  process.exit(1);
+});
+
+async function main() {
+  console.log('Node:', process.version);
+  console.log('CWD:', process.cwd());
+  console.log('Checking Prisma client folder exists:', prismaClientPath);
+  console.log('DATABASE_URL present?', !!process.env.DATABASE_URL);
+
+  if (!fs.existsSync(prismaClientPath)) {
+    console.warn('Warning: Prisma client folder not found at', prismaClientPath);
+    console.warn('→ Execute: npx prisma generate  (and confirm there were no errors).');
+    // continue anyway to get the exact error when instantiating Prisma
+  }
+
+  let prisma: PrismaClient | null = null;
+
+  try {
+    console.log('Instanciando PrismaClient()...');
+    prisma = new PrismaClient();
+    console.log('PrismaClient instanciado. Tentando prisma.$connect()...');
+    await prisma.$connect();
+    console.log('prisma.$connect() OK');
+  } catch (e) {
+    console.error('Erro ao criar/conectar PrismaClient:');
+    console.error(prettyInspect(e));
+    try {
+      console.error('JSON:', JSON.stringify(e, Object.getOwnPropertyNames(e), 2));
+    } catch {
+      console.error('Falha ao serializar erro em JSON.');
+    }
+    // Rethrow para cair no handler global e terminar o processo (mais fácil de debugar)
+    throw e;
+  }
+
+  // Se chegou aqui, Prisma conectou — continue com a app
+  const app = express();
+
+  // Middlewares
+  app.use(cors());
+  app.use(express.json());
+
+  // --- Lógica de Padronização ---
+  interface StandardizedSale {
+    orderId: string;
+    orderDate: Date;
+    productName: string;
+    quantity: number;
+    totalPrice: number;
+    source: string;
+  }
+
+  const parseCurrency = (value: any): number => {
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string') {
+      const cleanValue = value.replace(/BRL/g, '').trim().replace(/\./g, '').replace(',', '.');
+      return parseFloat(cleanValue) || 0;
+    }
+    return 0;
+  };
+
+  const standardizeData = (row: any, source: string): StandardizedSale | null => {
+    try {
+      if (source === 'shopee') {
+        return {
+          orderId: row['ID do Pedido'],
+          orderDate: new Date(row['Data de Criação do Pedido']),
+          productName: row['Nome do Produto'],
+          quantity: parseInt(row['Quantidade'], 10),
+          totalPrice: parseFloat(row['Preço Final Total']),
+          source: 'shopee',
+        };
+      }
+      if (source === 'tiktok') {
+        if (!row['Order ID']) return null;
+        return {
+          orderId: row['Order ID'],
+          orderDate: new Date(row['Created Time']),
+          productName: row['Product Name'],
+          quantity: parseInt(row['Quantity'], 10) || 0,
+          totalPrice: parseCurrency(row['Order Amount']),
+          source: 'tiktok',
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error('Erro ao padronizar a linha:', row, error);
+      return null;
+    }
+  };
+  // --- Fim da Lógica de Padronização ---
+
+  // Rota de Upload
+  app.post('/api/upload', (req, res) => {
+    const form = new formidable.IncomingForm();
+
+    form.parse(req, async (err: any, fields: any, files: any) => {
+      if (err) {
+        console.error('form.parse erro:', err);
+        return res.status(500).json({ message: 'Erro ao processar o formulário.' });
+      }
+
+      const file = files.file as any;
+      const source = fields.source as string;
+
+      try {
+        const workbook = xlsx.readFile(file.filepath);
+        const sheetName = workbook.SheetNames[0];
+        const jsonData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+        const standardizedSales = jsonData
+          .map((row) => standardizeData(row, source))
+          .filter((sale): sale is StandardizedSale => sale !== null);
+
+        const result = await prisma!.order.createMany({
+          data: standardizedSales,
+          skipDuplicates: true,
+        });
+
+        res.status(200).json({
+          message: 'Arquivo processado e salvo com sucesso!',
+          count: result.count,
+        });
+      } catch (error) {
+        console.error('Erro ao ler/processar planilha ou gravar no DB:', prettyInspect(error));
+        res.status(500).json({ message: 'Erro ao ler ou processar a planilha.' });
+      }
+    });
+  });
+
+  // Rota para buscar todas as vendas
+  app.get('/api/sales', async (req, res) => {
+    try {
+      const sales = await prisma!.order.findMany({
+        orderBy: { orderDate: 'desc' },
+      });
+      res.status(200).json(sales);
+    } catch (error) {
+      console.error('Erro ao buscar vendas:', prettyInspect(error));
+      res.status(500).json({ message: 'Erro ao buscar vendas.' });
+    }
+  });
+
+  const server = app.listen(APP_PORT, () => {
+    console.log(`🚀 Servidor rodando em http://localhost:${APP_PORT}`);
+  });
+
+  // graceful shutdown
+  const shutdown = async (signal: string) => {
+    console.log(`\nReceived ${signal}. Shutting down...`);
+    server.close(() => console.log('HTTP server closed.'));
+    if (prisma) {
+      try {
+        await prisma.$disconnect();
+        console.log('Prisma disconnected.');
+      } catch (e) {
+        console.error('Erro ao desconectar Prisma:', prettyInspect(e));
+      }
+    }
+    process.exit(0);
+  };
+
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+}
+
+main().catch((e) => {
+  // o handler global uncaughtException/unhandledRejection imprimirá detalhes
+  console.error('main() threw:', prettyInspect(e));
+  throw e;
+});
