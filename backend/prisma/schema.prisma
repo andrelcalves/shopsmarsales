@@ -12,7 +12,7 @@ datasource db {
 
 model Order {
   id          Int      @id @default(autoincrement())
-  orderId     String   @unique
+  orderId     String
   orderDate   DateTime
   productName String
   quantity    Int
@@ -20,5 +20,35 @@ model Order {
   source      String
   createdAt   DateTime @default(now())
   status      String   @default("")
+  items       OrderItem[]
   @@unique([orderId, source])
+}
+
+model OrderItem {
+  id          Int    @id @default(autoincrement())
+  orderId     String
+  source      String
+  productCode String
+  name        String
+  unitPrice   Float
+  quantity    Int
+  totalPrice  Float
+
+  order Order @relation(fields: [orderId, source], references: [orderId, source], onDelete: Cascade)
+
+  @@unique([orderId, source, productCode])
+  @@index([orderId, source])
+}
+
+model AdSpend {
+  id        Int      @id @default(autoincrement())
+  month     DateTime // sempre usar primeiro dia do mês (ex.: 2026-01-01)
+  channel   String   // ex.: shopee | tiktok | tray | meta | google | etc
+  amount    Float
+  notes     String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([month, channel])
+  @@index([month])
 }
