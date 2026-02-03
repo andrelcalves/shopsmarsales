@@ -1,9 +1,12 @@
 // frontend/src/App.tsx
 import React, { useState, FormEvent, useEffect } from 'react';
 import './App.css';
-import Dashboard from './Dashboard'; // Importa o componente de gráficos
+import Dashboard from './Dashboard';
 import AdsSpend from './AdsSpend';
 import AdsDashboard from './AdsDashboard';
+import Products from './Products';
+import Simulation from './Simulation';
+import PaymentTypeFees from './PaymentTypeFees';
 
 const API_URL = 'http://localhost:4000';
 
@@ -28,7 +31,7 @@ interface Sale {
 
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'products' | 'payment_type_fees' | 'simulation'>('upload');
 
   // --- LÓGICA DA TELA DE UPLOAD ---
   const [file, setFile] = useState<File | null>(null);
@@ -152,7 +155,13 @@ function App() {
                     ? 'Dashboard'
                     : currentView === 'ads_spend'
                       ? 'Cadastro ADS'
-                      : 'Dashboard ADS'}
+                      : currentView === 'ads_dashboard'
+                        ? 'Dashboard ADS'
+                        : currentView === 'products'
+                          ? 'Produtos'
+                          : currentView === 'payment_type_fees'
+                            ? 'Taxas Tray'
+                            : 'Simulação'}
               </h1>
               <p className="mt-1 text-white/80 text-sm">Shopee + TikTok + Tray • Importação e visualização</p>
             </div>
@@ -195,6 +204,33 @@ function App() {
               >
                 Dashboard ADS
               </button>
+              <button
+                onClick={() => setCurrentView('products')}
+                className={cn(
+                  'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                  currentView === 'products' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                )}
+              >
+                Produtos
+              </button>
+              <button
+                onClick={() => setCurrentView('payment_type_fees')}
+                className={cn(
+                  'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                  currentView === 'payment_type_fees' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                )}
+              >
+                Taxas Tray
+              </button>
+              <button
+                onClick={() => setCurrentView('simulation')}
+                className={cn(
+                  'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                  currentView === 'simulation' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                )}
+              >
+                Simulação
+              </button>
             </div>
           </div>
         </div>
@@ -207,6 +243,12 @@ function App() {
         <AdsSpend />
       ) : currentView === 'ads_dashboard' ? (
         <AdsDashboard />
+      ) : currentView === 'products' ? (
+        <Products />
+      ) : currentView === 'payment_type_fees' ? (
+        <PaymentTypeFees />
+      ) : currentView === 'simulation' ? (
+        <Simulation />
       ) : (
         <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
           {/* Card: Upload */}

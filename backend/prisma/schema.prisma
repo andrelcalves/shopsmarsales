@@ -21,6 +21,10 @@ model Order {
   createdAt   DateTime @default(now())
   status      String   @default("")
   items       OrderItem[]
+  commissionFee Float?  // Net Commission Fee (taxa de comissão líquida)
+  serviceFee    Float?  // Taxa de serviço bruta
+  freight       Float?  // Frete (apenas canal tray)
+  paymentType   String? @default("")  // Tipo de pagamento (ex: Pix - Vindi, Cartão de Crédito - Mercado Pago)
   @@unique([orderId, source])
 }
 
@@ -31,13 +35,30 @@ model OrderItem {
   productCode String
   name        String
   unitPrice   Float
+  discount    Float?   @default(0)  // Desconto dado pela loja no produto
   quantity    Int
   totalPrice  Float
+
+  productId   Int?
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
 
   order Order @relation(fields: [orderId, source], references: [orderId, source], onDelete: Cascade)
 
   @@unique([orderId, source, productCode])
   @@index([orderId, source])
+  @@index([productId])
+}
+
+model Product {
+  id        Int       @id @default(autoincrement())
+  code      String    @unique   // Código único (ex: "803", "tray_803", SKU)
+  name      String
+  costPrice Float?
+  source    String?   @default("")  // Opcional: "tray" | "shopee" | "tiktok" para saber origem
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  orderItems OrderItem[]
 }
 
 model AdSpend {
@@ -51,4 +72,17 @@ model AdSpend {
 
   @@unique([month, channel])
   @@index([month])
+}
+
+model PaymentTypeFee {
+  id          Int      @id @default(autoincrement())
+  month       DateTime // primeiro dia do mês (ex.: 2026-01-01)
+  channel     String   // tray (por enquanto)
+  paymentType String   // ex: "Pix - Vindi", "Cartão de Crédito - Mercado Pago"
+  percent     Float    // percentual da taxa sobre o valor do pedido
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([month, channel, paymentType])
+  @@index([month, channel])
 }
