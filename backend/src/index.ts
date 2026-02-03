@@ -91,8 +91,10 @@ interface StandardizedSale {
   productName: string;
   quantity: number;
   totalPrice: number;
-  status: string; // <--- NOVO CAMPO
+  status: string;
   source: string;
+  freight?: number;
+  paymentType?: string; // Pagamento tipo (apenas Tray)
 }
 
 interface StandardizedOrderItem {
@@ -105,6 +107,136 @@ interface StandardizedOrderItem {
   totalPrice: number;
 }
 
+interface StandardizedShopeeItem {
+  orderId: string;
+  orderDate: Date;
+  status: string;
+  commissionFee: number | null;
+  serviceFee: number | null;
+  productCode: string;      // para OrderItem e Product: canal_idUnico (ex: shopee_1734118760415856191)
+  name: string;
+  unitPrice: number;
+  quantity: number;
+  totalPrice: number;
+  discount: number | null;
+}
+
+function standardizeShopeeRow(row: Record<string, unknown>): StandardizedShopeeItem | null {
+  try {
+    const orderIdVal = pick(row, ['ID do pedido', 'ID do Pedido', 'Order ID']);
+    const orderDateVal = pick(row, ['Data de criação do pedido', 'Data de Criação do Pedido', 'Created Time']);
+    const statusVal = pick(row, ['Status do pedido', 'Status', 'Order Status']);
+    const productNameVal = pick(row, ['Nome do Produto', 'Nome do produto', 'Product Name']);
+    const variationVal = pick(row, ['Variation', 'Variação', 'Variacao']);
+    const skuIdVal = pick(row, ['SKU ID', 'ID do SKU']);
+    const qtyVal = pick(row, ['Quantidade', 'Qty', 'Quantity']);
+    const priceVal = pick(row, ['SKU Subtotal After Discount', 'Subtotal do produto', 'Valor Total', 'Total global', 'Preço Final Total']);
+    const unitPriceVal = pick(row, ['SKU Unit Original Price', 'Preço unitário', 'Preco unitario', 'Unit Price', 'Preço']);
+    const platformDiscVal = pick(row, ['SKU Platform Discount']);
+    const sellerDiscVal = pick(row, ['SKU Seller Discount']);
+    const discountVal = pick(row, ['Desconto', 'Discount', 'Desconto do produto', 'Seller discount']);
+    const commissionVal = pick(row, ['Net Commission Fee', 'Taxa de comissão líquida', 'Commission Fee']);
+    const serviceVal = pick(row, ['Taxa de serviço bruta', 'Gross service fee', 'Service Fee', 'Taxa de servico bruta']);
+
+    const orderId = orderIdVal ? String(orderIdVal).trim() : '';
+    const orderDate = parseDateFlexible(orderDateVal);
+    const status = statusVal ? String(statusVal).trim() : 'Desconhecido';
+    const productName = productNameVal ? String(productNameVal).trim() : '';
+    const variation = variationVal ? String(variationVal).trim() : '';
+    const name = variation ? `${productName} - ${variation}` : productName;
+    const skuId = skuIdVal ? String(skuIdVal).trim() : '';
+    const slug = slugifyProductKey(productName, variation);
+    const productCode = skuId || hashToUniqueId(slug);
+    const quantity = qtyVal ? parseInt(String(qtyVal), 10) || 0 : 0;
+    const totalPrice = parseBrNumber(priceVal);
+    const unitPrice = unitPriceVal != null ? parseBrNumber(unitPriceVal) : (quantity > 0 ? totalPrice / quantity : 0);
+    const discount = discountVal != null
+      ? parseBrNumber(discountVal)
+      : (platformDiscVal != null || sellerDiscVal != null)
+        ? (parseBrNumber(platformDiscVal) || 0) + (parseBrNumber(sellerDiscVal) || 0) || null
+        : null;
+    const commissionFee = commissionVal != null ? parseBrNumber(commissionVal) : null;
+    const serviceFee = serviceVal != null ? parseBrNumber(serviceVal) : null;
+
+    if (!orderId || !orderDate || isNaN(orderDate.getTime())) return null;
+
+    return {
+      orderId,
+      orderDate,
+      status,
+      commissionFee,
+      serviceFee,
+      productCode,
+      name,
+      unitPrice,
+      quantity,
+      totalPrice,
+      discount,
+    };
+  } catch (e) {
+    console.error('Erro ao padronizar linha Shopee:', e);
+    return null;
+  }
+}
+
+interface StandardizedTiktokItem {
+  orderId: string;
+  orderDate: Date;
+  status: string;
+  productCode: string;
+  name: string;
+  unitPrice: number;
+  quantity: number;
+  totalPrice: number;
+  discount: number | null;
+}
+
+
+function standardizeTiktokRow(row: Record<string, unknown>): StandardizedTiktokItem | null {
+  try {
+    const orderIdVal = pick(row, ['Order ID']);
+    const orderDateVal = pick(row, ['Created Time']);
+    const statusVal = pick(row, ['Order Status', 'Order Substatus']);
+    const productNameVal = pick(row, ['Product Name']);
+    const variationVal = pick(row, ['Variation']);
+    const skuIdVal = pick(row, ['SKU ID']);
+    const sellerSkuVal = pick(row, ['Seller SKU']);
+    const qtyVal = pick(row, ['Quantity']);
+    const unitPriceVal = pick(row, ['SKU Unit Original Price']);
+    const subtotalAfterVal = pick(row, ['SKU Subtotal After Discount']);
+    const platformDiscountVal = pick(row, ['SKU Platform Discount']);
+    const sellerDiscountVal = pick(row, ['SKU Seller Discount']);
+
+    const orderId = orderIdVal ? String(orderIdVal).trim() : '';
+    const orderDate = parseDateFlexible(orderDateVal);
+    const status = statusVal ? String(statusVal).trim() : 'Desconhecido';
+    const productName = productNameVal ? String(productNameVal).trim() : '';
+    const variation = variationVal ? String(variationVal).trim() : '';
+    const name = variation ? `${productName} - ${variation}` : productName;
+    const productCode = (sellerSkuVal ? String(sellerSkuVal).trim() : null) || (skuIdVal ? String(skuIdVal).trim() : '') || `${orderId}_${(productName || 'item').slice(0, 30)}`;
+    const quantity = qtyVal ? parseInt(String(qtyVal), 10) || 0 : 0;
+    const unitPrice = parseBrNumber(unitPriceVal);
+    const totalPrice = parseBrNumber(subtotalAfterVal);
+    const discount = (parseBrNumber(platformDiscountVal) || 0) + (parseBrNumber(sellerDiscountVal) || 0) || null;
+
+    if (!orderId || !orderDate || isNaN(orderDate.getTime())) return null;
+
+    return {
+      orderId,
+      orderDate,
+      status,
+      productCode,
+      name,
+      unitPrice,
+      quantity,
+      totalPrice,
+      discount: discount !== null && discount > 0 ? discount : null,
+    };
+  } catch (e) {
+    console.error('Erro ao padronizar linha TikTok:', e);
+    return null;
+  }
+}
 function parseTimeToParts(v: unknown): { hh: number; mm: number; ss: number } | null {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
@@ -166,10 +298,7 @@ const standardizeData = (row: Record<string, unknown>, source: string): Standard
 
     if (source === 'tiktok') {
       if (!row['Order ID']) return null;
-
-      // Tenta pegar status do TikTok (geralmente é "Order Status")
       const statusVal = pick(row, ['Order Status', 'Status', 'Order status']);
-
       return {
         orderId: String(row['Order ID']),
         orderDate: new Date(String(row['Created Time'] ?? '')),
@@ -182,22 +311,25 @@ const standardizeData = (row: Record<string, unknown>, source: string): Standard
     }
 
     if (source === 'tray') {
-      // CSV template: "Pedido";"Data";"Hora"; ... ;"Status pedido"; ... ;"Total"; ...
+      // CSV template: "Pedido";"Data";"Hora";"Frete valor"; ... ;"Status pedido"; ... ;"Total"; ...
       const orderIdVal = pick(row, ['Pedido', 'pedido', 'Order ID']);
       const orderDateVal = pick(row, ['Data', 'data']);
       const orderTimeVal = pick(row, ['Hora', 'hora']);
       const totalVal = pick(row, ['Total', 'total', 'Subtotal produtos', 'Subtotal produtos ']);
+      const freightVal = pick(row, ['Frete valor', 'Frete', 'Valor frete']);
+      const paymentTypeVal = pick(row, ['Pagamento tipo', 'Pagamento', 'Forma pagamento paga']);
       const statusVal = pick(row, ['Status pedido', 'Status', 'Status do pedido']);
       const channelVal = pick(row, ['Canal de venda', 'Canal', 'Canal']);
 
       const orderId = orderIdVal ? String(orderIdVal).trim() : '';
       const orderDate = parseDateAndTime(orderDateVal, orderTimeVal);
       const totalPrice = parseBrNumber(totalVal);
+      const freight = freightVal != null ? parseBrNumber(freightVal) : undefined;
+      const paymentType = paymentTypeVal ? String(paymentTypeVal).trim() : undefined;
       const status = statusVal ? String(statusVal).trim() : 'Desconhecido';
 
       if (!orderId || !orderDate || isNaN(orderDate.getTime())) return null;
 
-      // O template é nível pedido (não tem item). Preenchemos campos mínimos.
       const productName =
         channelVal && String(channelVal).trim()
           ? `Pedido (${String(channelVal).trim()})`
@@ -211,6 +343,8 @@ const standardizeData = (row: Record<string, unknown>, source: string): Standard
         totalPrice,
         status,
         source: 'tray',
+        freight,
+        paymentType,
       };
     }
 
@@ -224,6 +358,7 @@ const standardizeData = (row: Record<string, unknown>, source: string): Standard
 const standardizeTrayItem = (row: Record<string, unknown>): StandardizedOrderItem | null => {
   try {
     // CSV: "Código pedido";"Nome produto";"Preço venda";"Quantidade";"Código produto"
+    
     const orderIdVal = pick(row, ['Código pedido', 'Codigo pedido', 'C�digo pedido', 'Pedido', 'orderId']);
     const productCodeVal = pick(row, ['Código produto', 'Codigo produto', 'C�digo produto']);
     const nameVal = pick(row, ['Nome produto', 'Nome do Produto', 'Produto']);
@@ -233,7 +368,11 @@ const standardizeTrayItem = (row: Record<string, unknown>): StandardizedOrderIte
     const orderId = orderIdVal ? String(orderIdVal).trim() : '';
     const productCode = productCodeVal ? String(productCodeVal).trim() : '';
     const nameRaw = nameVal ? String(nameVal) : '';
-    const name = nameRaw.replace(/<br\s*\/?>/gi, '').trim();
+    const name = nameRaw
+      .replace(/<br\s*\/?>/gi, '')
+      .replace(/\s*\(Disponibilidade[^)]*\)/gi, '')
+      .replace(/\s*\(Imediata\)/gi, '')
+      .trim();
     const unitPrice = parseBrNumber(unitPriceVal);
     const quantity = qtyVal ? parseInt(String(qtyVal), 10) || 0 : 0;
 
@@ -275,6 +414,33 @@ function getFilePath(file: any): string | undefined {
   return file.filepath || file.path || file.filePath || file.tempFilePath;
 }
 
+function slugifyProductKey(name: string, variation: string): string {
+  const s = `${name}${variation ? '_' + variation : ''}`.trim();
+  return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || 'item';
+}
+
+function hashToUniqueId(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return String(Math.abs(h));
+}
+
+async function ensureProduct(prisma: any, source: string, productCode: string, name: string): Promise<number> {
+  const code = `${source}_${String(productCode).trim()}`;
+  const p = await prisma.product.upsert({
+    where: { code },
+    update: { name }, // atualiza nome em re-import (ex.: após remover "Imediata")
+    create: { code, name, source },
+  });
+  return p.id;
+}
+
 async function main() {
   console.log('Node:', process.version);
   
@@ -311,10 +477,10 @@ async function main() {
         }
 
         const ext = String(path.extname(filepath || '')).toLowerCase();
-        // CSV do Tray usa ';' como separador
+        // CSV: Tray usa ';', TikTok/Shopee usam ','
         const workbook =
           ext === '.csv'
-            ? xlsx.readFile(filepath, { FS: ';', raw: true })
+            ? xlsx.readFile(filepath, { FS: source === 'tray' ? ';' : ',', raw: true })
             : xlsx.readFile(filepath);
         const sheetName = workbook.SheetNames[0];
         const jsonData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
@@ -322,27 +488,227 @@ async function main() {
           raw: true,
         }) as Record<string, unknown>[];
 
+        if (source === 'shopee') {
+          const rows = jsonData
+            .map((row) => standardizeShopeeRow(row))
+            .filter((r): r is StandardizedShopeeItem => r !== null);
+
+          const byOrder = new Map<string, {
+            orderDate: Date;
+            status: string;
+            commissionFee: number | null;
+            serviceFee: number | null;
+            totalPrice: number;
+            productName: string;
+            quantity: number;
+          }>();
+          for (const r of rows) {
+            const key = r.orderId;
+            if (!byOrder.has(key)) {
+              byOrder.set(key, {
+                orderDate: r.orderDate,
+                status: r.status,
+                commissionFee: r.commissionFee,
+                serviceFee: r.serviceFee,
+                totalPrice: 0,
+                productName: r.name,
+                quantity: 0,
+              });
+            }
+            const agg = byOrder.get(key)!;
+            agg.totalPrice += r.totalPrice;
+            agg.quantity += r.quantity;
+          }
+
+          const ops: any[] = [];
+          for (const [orderId, agg] of byOrder.entries()) {
+            ops.push(
+              prisma.order.upsert({
+                where: { orderId_source: { orderId, source: 'shopee' } },
+                update: {
+                  orderDate: agg.orderDate,
+                  status: agg.status,
+                  totalPrice: Number(agg.totalPrice.toFixed(2)),
+                  quantity: agg.quantity,
+                  productName: agg.productName,
+                  commissionFee: agg.commissionFee,
+                  serviceFee: agg.serviceFee,
+                },
+                create: {
+                  orderId,
+                  source: 'shopee',
+                  orderDate: agg.orderDate,
+                  status: agg.status,
+                  totalPrice: Number(agg.totalPrice.toFixed(2)),
+                  quantity: agg.quantity,
+                  productName: agg.productName,
+                  commissionFee: agg.commissionFee,
+                  serviceFee: agg.serviceFee,
+                },
+              })
+            );
+          }
+          const productIds = new Map<string, number>();
+          for (const r of rows) {
+            const key = `shopee_${r.productCode}`;
+            if (!productIds.has(key)) {
+              const id = await ensureProduct(prisma, 'shopee', r.productCode, r.name);
+              productIds.set(key, id);
+            }
+          }
+          for (const r of rows) {
+            const productId = productIds.get(`shopee_${r.productCode}`);
+            ops.push(
+              (prisma as any).orderItem.upsert({
+                where: { orderId_source_productCode: { orderId: r.orderId, source: 'shopee', productCode: r.productCode } },
+                update: {
+                  name: r.name,
+                  unitPrice: r.unitPrice,
+                  quantity: r.quantity,
+                  totalPrice: r.totalPrice,
+                  discount: r.discount,
+                  productId,
+                },
+                create: {
+                  orderId: r.orderId,
+                  source: 'shopee',
+                  productCode: r.productCode,
+                  name: r.name,
+                  unitPrice: r.unitPrice,
+                  quantity: r.quantity,
+                  totalPrice: r.totalPrice,
+                  discount: r.discount ?? 0,
+                  productId,
+                },
+              })
+            );
+          }
+          const results = await prisma.$transaction(ops);
+          return res.status(200).json({
+            message: 'Processado com sucesso.',
+            count: results.length,
+          });
+        }
+
+        if (source === 'tiktok') {
+          const rows = jsonData
+            .map((row) => standardizeTiktokRow(row))
+            .filter((r): r is StandardizedTiktokItem => r !== null);
+
+          const byOrder = new Map<string, {
+            orderDate: Date;
+            status: string;
+            orderAmount: number;
+            productName: string;
+            quantity: number;
+          }>();
+          for (const r of rows) {
+            const key = r.orderId;
+            if (!byOrder.has(key)) {
+              const firstMatch = jsonData.find((row) => String(row['Order ID'] ?? '').trim() === key);
+              const orderAmount = parseBrNumber(firstMatch?.['Order Amount']);
+              byOrder.set(key, {
+                orderDate: r.orderDate,
+                status: r.status,
+                orderAmount,
+                productName: r.name,
+                quantity: 0,
+              });
+            }
+            byOrder.get(key)!.quantity += r.quantity;
+          }
+
+          const ops: any[] = [];
+          for (const [orderId, agg] of byOrder.entries()) {
+            const orderTotal = agg.orderAmount > 0 ? agg.orderAmount : rows.filter((r) => r.orderId === orderId).reduce((s, r) => s + r.totalPrice, 0);
+            ops.push(
+              prisma.order.upsert({
+                where: { orderId_source: { orderId, source: 'tiktok' } },
+                update: {
+                  orderDate: agg.orderDate,
+                  status: agg.status,
+                  totalPrice: Number(orderTotal.toFixed(2)),
+                  quantity: agg.quantity,
+                  productName: agg.productName,
+                },
+                create: {
+                  orderId,
+                  source: 'tiktok',
+                  orderDate: agg.orderDate,
+                  status: agg.status,
+                  totalPrice: Number(orderTotal.toFixed(2)),
+                  quantity: agg.quantity,
+                  productName: agg.productName,
+                },
+              })
+            );
+          }
+          const productIds = new Map<string, number>();
+          for (const r of rows) {
+            const key = `tiktok_${r.productCode}`;
+            if (!productIds.has(key)) {
+              const id = await ensureProduct(prisma, 'tiktok', r.productCode, r.name);
+              productIds.set(key, id);
+            }
+          }
+          for (const r of rows) {
+            const productId = productIds.get(`tiktok_${r.productCode}`);
+            ops.push(
+              (prisma as any).orderItem.upsert({
+                where: { orderId_source_productCode: { orderId: r.orderId, source: 'tiktok', productCode: r.productCode } },
+                update: {
+                  name: r.name,
+                  unitPrice: r.unitPrice,
+                  quantity: r.quantity,
+                  totalPrice: r.totalPrice,
+                  discount: r.discount,
+                  productId,
+                },
+                create: {
+                  orderId: r.orderId,
+                  source: 'tiktok',
+                  productCode: r.productCode,
+                  name: r.name,
+                  unitPrice: r.unitPrice,
+                  quantity: r.quantity,
+                  totalPrice: r.totalPrice,
+                  discount: r.discount ?? 0,
+                  productId,
+                },
+              })
+            );
+          }
+          const results = await prisma.$transaction(ops);
+          return res.status(200).json({ message: 'Processado com sucesso.', count: results.length });
+        }
+
         const standardizedSales = jsonData
           .map((row) => standardizeData(row, source))
           .filter((sale): sale is StandardizedSale => sale !== null);
 
         const operations = standardizedSales.map((sale) => {
+          const data: any = {
+            orderId: sale.orderId,
+            source: sale.source,
+            orderDate: sale.orderDate,
+            productName: sale.productName,
+            quantity: sale.quantity,
+            totalPrice: sale.totalPrice,
+            status: sale.status,
+          };
+          if (sale.source === 'tray') {
+            if (sale.freight != null) data.freight = sale.freight;
+            if (sale.paymentType != null) data.paymentType = sale.paymentType;
+          }
           return prisma.order.upsert({
             where: {
-              // Certifique-se de que @@unique([orderId, source]) existe no schema
-              orderId_source: { 
+              orderId_source: {
                 orderId: sale.orderId,
                 source: sale.source,
               },
             },
-            update: {
-              totalPrice: sale.totalPrice,
-              productName: sale.productName,
-              quantity: sale.quantity,
-              orderDate: sale.orderDate,
-              status: sale.status, // Atualiza o status se mudar
-            },
-            create: sale, // Cria com status
+            update: data,
+            create: data,
           });
         });
 
@@ -405,10 +771,20 @@ async function main() {
           else byOrder.set(k, { qty: prev.qty + it.quantity, firstName: prev.firstName });
         }
 
+        const productIds = new Map<string, number>();
+        for (const it of items) {
+          const key = `tray_${it.productCode}`;
+          if (!productIds.has(key)) {
+            const id = await ensureProduct(prisma, 'tray', it.productCode, it.name);
+            productIds.set(key, id);
+          }
+        }
+
         const ops: any[] = [];
 
         // upsert item por (orderId, source, productCode)
         for (const it of items) {
+          const productId = productIds.get(`tray_${it.productCode}`);
           ops.push(
             (prisma as any).orderItem.upsert({
               where: { orderId_source_productCode: { orderId: it.orderId, source: 'tray', productCode: it.productCode } },
@@ -417,8 +793,9 @@ async function main() {
                 unitPrice: it.unitPrice,
                 quantity: it.quantity,
                 totalPrice: it.totalPrice,
+                productId,
               },
-              create: it,
+              create: { ...it, productId },
             })
           );
         }
@@ -460,6 +837,61 @@ async function main() {
     }
   });
 
+  app.get('/api/products', async (req, res) => {
+    try {
+      const q = String(req.query.q ?? '').trim();
+      const where = q ? {
+        OR: [
+          { code: { contains: q, mode: 'insensitive' } },
+          { name: { contains: q, mode: 'insensitive' } },
+        ],
+      } : {};
+      const rows = await (prisma as any).product.findMany({
+        where,
+        orderBy: { name: 'asc' },
+        include: { _count: { select: { orderItems: true } } },
+      });
+      return res.status(200).json(rows);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar produtos.' });
+    }
+  });
+
+  app.post('/api/products', async (req, res) => {
+    try {
+      const { code, name, costPrice, source } = req.body ?? {};
+      const c = String(code ?? '').trim();
+      const n = String(name ?? '').trim();
+      const src = String(source ?? '').trim().toLowerCase();
+      if (!c || !n) return res.status(400).json({ message: 'code e name obrigatórios.' });
+      const lookupCode = src ? `${src}_${c}` : c;
+      const row = await (prisma as any).product.upsert({
+        where: { code: lookupCode },
+        update: { name: n, costPrice: costPrice != null ? parseBrNumber(costPrice) : null, source: src },
+        create: { code: lookupCode, name: n, costPrice: costPrice != null ? parseBrNumber(costPrice) : null, source: src },
+      });
+      return res.status(200).json(row);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao salvar produto.' });
+    }
+  });
+
+  app.put('/api/products/:id', async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const { name, costPrice } = req.body ?? {};
+      const data: any = {};
+      if (name != null) data.name = String(name);
+      if (costPrice !== undefined) data.costPrice = costPrice === null ? null : parseBrNumber(costPrice);
+      const row = await (prisma as any).product.update({ where: { id }, data });
+      return res.status(200).json(row);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao atualizar produto.' });
+    }
+  }); 
   // Remove registros por origem (ex.: ?source=tray)
   app.delete('/api/orders', async (req, res) => {
     try {
@@ -570,6 +1002,221 @@ async function main() {
     }
   });
 
+  // Taxas por tipo de pagamento (Tray)
+  // GET /api/payment-type-fees?month=2026-01&channel=tray
+  app.get('/api/payment-type-fees', async (req, res) => {
+    try {
+      const monthStr = String(req.query.month ?? '').trim();
+      const channel = String(req.query.channel ?? 'tray').trim().toLowerCase();
+      const month = monthStartFromYYYYMM(monthStr);
+      if (!month) return res.status(400).json({ message: 'Parâmetro month inválido (use YYYY-MM).' });
+
+      const prismaAny = prisma as any;
+      const rows = await prismaAny.paymentTypeFee.findMany({
+        where: { month, channel },
+        orderBy: { paymentType: 'asc' },
+      });
+      return res.status(200).json(rows);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar taxas por tipo de pagamento.' });
+    }
+  });
+
+  // POST /api/payment-type-fees - body: { month, channel, paymentType, percent }
+  app.post('/api/payment-type-fees', async (req, res) => {
+    try {
+      const { month: monthStr, channel, paymentType, percent } = req.body ?? {};
+      const ch = String(channel ?? 'tray').trim().toLowerCase();
+      const pt = String(paymentType ?? '').trim();
+      const pct = parseBrNumber(percent ?? 0);
+      const month = monthStartFromYYYYMM(String(monthStr ?? ''));
+      if (!month) return res.status(400).json({ message: 'month inválido. Use YYYY-MM.' });
+      if (!pt) return res.status(400).json({ message: 'paymentType obrigatório.' });
+
+      const prismaAny = prisma as any;
+      const row = await prismaAny.paymentTypeFee.upsert({
+        where: { month_channel_paymentType: { month, channel: ch, paymentType: pt } },
+        update: { percent: pct },
+        create: { month, channel: ch, paymentType: pt, percent: pct },
+      });
+      return res.status(200).json(row);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao salvar taxa.' });
+    }
+  });
+
+  // DELETE /api/payment-type-fees?month=2026-01&channel=tray&paymentType=...
+  app.delete('/api/payment-type-fees', async (req, res) => {
+    try {
+      const monthStr = String(req.query.month ?? '');
+      const channel = String(req.query.channel ?? 'tray').trim().toLowerCase();
+      const paymentType = String(req.query.paymentType ?? '').trim();
+      const month = monthStartFromYYYYMM(monthStr);
+      if (!month) return res.status(400).json({ message: 'month inválido. Use YYYY-MM.' });
+      if (!paymentType) return res.status(400).json({ message: 'paymentType obrigatório.' });
+
+      const prismaAny = prisma as any;
+      await prismaAny.paymentTypeFee.delete({
+        where: { month_channel_paymentType: { month, channel, paymentType } },
+      });
+      return res.status(200).json({ message: 'Removido com sucesso.' });
+    } catch (e: any) {
+      if (String(e?.code || '') === 'P2025') {
+        return res.status(200).json({ message: 'Não havia registro para remover.' });
+      }
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao remover taxa.' });
+    }
+  });
+
+  // GET /api/payment-types - lista tipos de pagamento únicos dos pedidos Tray (para dropdown)
+  app.get('/api/payment-types', async (_req, res) => {
+    try {
+      const rows = await prisma.order.findMany({
+        where: { source: 'tray' },
+      });
+      const seen = new Set<string>();
+      for (const r of rows) {
+        const pt = (r as any).paymentType;
+        if (pt && String(pt).trim()) seen.add(String(pt).trim());
+      }
+      const types = [...seen].sort();
+      return res.status(200).json(types);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar tipos de pagamento.' });
+    }
+  });
+
+  // Simulação P&L por mês e canal
+  // GET /api/simulation?month=2026-01&channel=shopee|tiktok|tray|all&fixedCost=2459&cardPixPercent=3.63
+  app.get('/api/simulation', async (req, res) => {
+    try {
+      const monthStr = String(req.query.month ?? '').trim();
+      const channel = String(req.query.channel ?? 'all').trim().toLowerCase();
+      const fixedCost = parseBrNumber(req.query.fixedCost ?? 0);
+      const cardPixPercent = parseBrNumber(req.query.cardPixPercent ?? 3.63);
+      const taxPercent = 5;
+
+      const monthStart = monthStartFromYYYYMM(monthStr);
+      if (!monthStart) return res.status(400).json({ message: 'Parâmetro month inválido (use YYYY-MM).' });
+
+      const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
+      const orderWhere: any = {
+        orderDate: { gte: monthStart, lt: monthEnd },
+        NOT: [
+          { status: { contains: 'ancelado', mode: 'insensitive' } },
+          { status: { contains: 'Não pago', mode: 'insensitive' } },
+        ],
+      };
+      if (channel !== 'all') orderWhere.source = channel;
+
+      const orders = await prisma.order.findMany({
+        where: orderWhere,
+        include: { items: { include: { product: true } } },
+      });
+
+      const totalRevenue = orders.reduce((s, o) => s + (o.totalPrice || 0), 0);
+
+      const shopeeFees = channel === 'tray' || channel === 'tiktok' ? 0 : orders
+        .filter((o) => o.source === 'shopee')
+        .reduce((s, o) => s + (o.commissionFee || 0) + (o.serviceFee || 0), 0);
+
+      const tiktokFees = channel === 'tray' || channel === 'shopee' ? 0 : orders
+        .filter((o) => o.source === 'tiktok')
+        .reduce((s, o) => s + (o.commissionFee || 0) + (o.serviceFee || 0), 0);
+
+      const trayOrders = orders.filter((o) => o.source === 'tray');
+      const trayRevenue = channel === 'tray' ? totalRevenue : (channel === 'all' ? trayOrders.reduce((s, o) => s + (o.totalPrice || 0), 0) : 0);
+      let cardPix = 0;
+      if (channel === 'tray' || channel === 'all') {
+        const prismaAny = prisma as any;
+        const feeRows = await prismaAny.paymentTypeFee.findMany({
+          where: { month: monthStart, channel: 'tray' },
+        });
+        const feeMap = new Map<string, number>();
+        for (const r of feeRows) feeMap.set(String(r.paymentType || '').trim(), Number(r.percent || 0));
+        for (const o of trayOrders) {
+          const pt = String((o as any).paymentType || '').trim();
+          const pct = feeMap.get(pt) ?? cardPixPercent;
+          cardPix += (o.totalPrice || 0) * (pct / 100);
+        }
+      }
+
+      const freight = (channel === 'tray' || channel === 'all')
+        ? orders
+            .filter((o) => o.source === 'tray')
+            .reduce((s, o) => s + ((o as any).freight || 0), 0)
+        : 0;
+
+      const productionCost = orders.reduce((s, o) => {
+        for (const item of o.items) {
+          const cost = (item.product?.costPrice ?? 0) * (item.quantity || 0);
+          s += cost;
+        }
+        return s;
+      }, 0);
+
+      const prismaAny = prisma as any;
+      const adSpendRows = await prismaAny.adSpend.findMany({
+        where: {
+          month: { gte: monthStart, lt: monthEnd },
+          ...(channel !== 'all' ? { channel } : {}),
+        },
+      });
+      const adsSpend = adSpendRows.reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+
+      const allOrdersForProportion = channel !== 'all'
+        ? await prisma.order.findMany({
+            where: {
+              orderDate: { gte: monthStart, lt: monthEnd },
+              NOT: [
+                { status: { contains: 'ancelado', mode: 'insensitive' } },
+                { status: { contains: 'Não pago', mode: 'insensitive' } },
+              ],
+            },
+          })
+        : orders;
+      const totalRevenueAll = allOrdersForProportion.reduce((s, o) => s + (o.totalPrice || 0), 0);
+      const fixedCostProportional = totalRevenueAll > 0 && channel !== 'all'
+        ? fixedCost * (totalRevenue / totalRevenueAll)
+        : fixedCost;
+
+      const tax = totalRevenue * (taxPercent / 100);
+      const profit = totalRevenue - adsSpend - shopeeFees - tiktokFees - cardPix - freight - productionCost - fixedCostProportional - tax;
+      const margin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
+
+      return res.status(200).json({
+        month: monthStr,
+        channel,
+        faturamentoBruto: Number(totalRevenue.toFixed(2)),
+        adsInvestimento: Number(adsSpend.toFixed(2)),
+        adsPercent: totalRevenue > 0 ? Number((adsSpend / totalRevenue * 100).toFixed(2)) : 0,
+        taxasShopee: Number(shopeeFees.toFixed(2)),
+        taxasShopeePercent: totalRevenue > 0 ? Number((shopeeFees / totalRevenue * 100).toFixed(2)) : 0,
+        taxasTiktok: Number(tiktokFees.toFixed(2)),
+        taxasTiktokPercent: totalRevenue > 0 ? Number((tiktokFees / totalRevenue * 100).toFixed(2)) : 0,
+        taxasCartaoPix: Number(cardPix.toFixed(2)),
+        taxasCartaoPixPercent: totalRevenue > 0 ? Number((cardPix / totalRevenue * 100).toFixed(2)) : 0,
+        frete: Number(freight.toFixed(2)),
+        fretePercent: totalRevenue > 0 ? Number((freight / totalRevenue * 100).toFixed(2)) : 0,
+        custoProducao: Number(productionCost.toFixed(2)),
+        custoProducaoPercent: totalRevenue > 0 ? Number((productionCost / totalRevenue * 100).toFixed(2)) : 0,
+        custoFixo: Number(fixedCostProportional.toFixed(2)),
+        custoFixoPercent: totalRevenue > 0 ? Number((fixedCostProportional / totalRevenue * 100).toFixed(2)) : 0,
+        imposto: Number(tax.toFixed(2)),
+        impostoPercent: taxPercent,
+        lucroLiquido: Number(profit.toFixed(2)),
+        margemLucro: Number(margin.toFixed(2)),
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao calcular simulação.' });
+    }
+  });
+
   // Dashboard ADS (ROAS) baseado em Orders + AdSpend
   // GET /api/ads-dashboard?from=2026-01&to=2026-12
   app.get('/api/ads-dashboard', async (req, res) => {
@@ -593,7 +1240,9 @@ async function main() {
       const revenueByMonthTotal = new Map<string, number>(); // YYYY-MM
 
       for (const o of orders) {
-        if (o.status && String(o.status).toLowerCase().includes('cancelado')) continue;
+        const status = String(o.status || '').toLowerCase();
+        if (status.includes('cancelado')) continue;
+        if (status.includes('não pago') || status.includes('nao pago')) continue;
         const d = new Date(o.orderDate);
         const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
         const ch = String(o.source || '').toLowerCase();
@@ -672,7 +1321,10 @@ app.get('/api/dashboard', async (_req, res) => {
     // 1. Busca vendas válidas
     const sales = await prisma.order.findMany({
       where: {
-        NOT: { status: { contains: 'Cancelado' } }
+        NOT: [
+          { status: { contains: 'Cancelado' } },
+          { status: { contains: 'Não pago' } }
+        ]
       },
       orderBy: { orderDate: 'asc' }
     });
@@ -697,8 +1349,8 @@ app.get('/api/dashboard', async (_req, res) => {
       if (!salesByMonth[monthYear]) {
         salesByMonth[monthYear] = { 
           name: monthYear, 
-          shopee: 0, tiktok: 0, total: 0, 
-          shopeeCount: 0, tiktokCount: 0, totalCount: 0 
+          shopee: 0, tiktok: 0, tray: 0, total: 0, 
+          shopeeCount: 0, tiktokCount: 0, trayCount: 0, totalCount: 0 
         };
       }
       
@@ -709,6 +1361,10 @@ app.get('/api/dashboard', async (_req, res) => {
       if (source === 'tiktok') {
         salesByMonth[monthYear].tiktok += amount;
         salesByMonth[monthYear].tiktokCount += 1;
+      }
+      if (source === 'tray') {
+        salesByMonth[monthYear].tray += amount;
+        salesByMonth[monthYear].trayCount += 1;
       }
       salesByMonth[monthYear].total += amount;
       salesByMonth[monthYear].totalCount += 1;

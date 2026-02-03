@@ -36,12 +36,19 @@ interface ProductRank {
 interface DashboardData {
   kpis: { revenue: number; orders: number; ticketMedio: number };
   byChannel: { name: string; value: number }[];
-  byMonth: { name: string; shopee: number; tiktok: number; total: number; totalCount: number }[];
+  byMonth: {
+    name: string;
+    shopee: number;
+    tiktok: number;
+    tray: number;
+    total: number;
+    totalCount: number;
+  }[];
   topProducts: ProductRank[];
 }
 
 type RangeKey = "7d" | "30d" | "90d";
-type BarMode = "total" | "shopee" | "tiktok";
+type BarMode = "total" | "shopee" | "tiktok" | "tray";
 
 const ranges: { key: RangeKey; label: string }[] = [
   { key: "7d", label: "7 dias" },
@@ -49,7 +56,12 @@ const ranges: { key: RangeKey; label: string }[] = [
   { key: "90d", label: "90 dias" },
 ];
 
-const CHANNEL_COLORS = ["#FF6B35", "#1F2937"]; // Shopee / TikTok
+const CHANNEL_COLORS: Record<string, string> = {
+  shopee: "#FF6B35",
+  tiktok: "#1F2937",
+  tray: "#0EA5E9",
+};
+const PIE_COLORS = ["#FF6B35", "#1F2937", "#0EA5E9", "#10B981"];
 const UI = {
   bg: "bg-slate-50",
   card: "bg-white/90 backdrop-blur border border-slate-200 shadow-sm rounded-2xl",
@@ -159,8 +171,9 @@ export default function DashboardBI() {
     if (!data) return null;
     const shopee = data.byMonth.reduce((a, m) => a + (m.shopee || 0), 0);
     const tiktok = data.byMonth.reduce((a, m) => a + (m.tiktok || 0), 0);
+    const tray = data.byMonth.reduce((a, m) => a + (m.tray || 0), 0);
     const total = data.byMonth.reduce((a, m) => a + (m.total || 0), 0);
-    return { shopee, tiktok, total };
+    return { shopee, tiktok, tray, total };
   }, [data]);
 
   if (loading) return <div className={cn(UI.bg, "min-h-screen flex items-center justify-center text-slate-500")}>Carregando...</div>;
@@ -218,7 +231,7 @@ export default function DashboardBI() {
           </div>
 
           {/* Mini resumo do período */}
-          <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="mt-5 grid grid-cols-1 md:grid-cols-4 gap-3">
             <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
               <div className="text-xs text-white/80 font-semibold">Total no período</div>
               <div className="text-lg font-black">{totals ? formatMoney(totals.total) : "-"}</div>
@@ -230,6 +243,10 @@ export default function DashboardBI() {
             <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
               <div className="text-xs text-white/80 font-semibold">TikTok</div>
               <div className="text-lg font-black">{totals ? formatMoney(totals.tiktok) : "-"}</div>
+            </div>
+            <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
+              <div className="text-xs text-white/80 font-semibold">Tray</div>
+              <div className="text-lg font-black">{totals ? formatMoney(totals.tray) : "-"}</div>
             </div>
           </div>
         </div>
@@ -275,6 +292,7 @@ export default function DashboardBI() {
                   { key: "total", label: "Total" },
                   { key: "shopee", label: "Shopee" },
                   { key: "tiktok", label: "TikTok" },
+                  { key: "tray", label: "Tray" },
                 ] as const).map((m) => (
                   <button
                     key={m.key}
@@ -312,9 +330,17 @@ export default function DashboardBI() {
                   <Legend />
                   <Bar
                     dataKey={barKey}
-                    name={barKey === "total" ? "Total" : barKey === "shopee" ? "Shopee" : "TikTok"}
+                    name={
+                      barKey === "total"
+                        ? "Total"
+                        : barKey === "shopee"
+                          ? "Shopee"
+                          : barKey === "tiktok"
+                            ? "TikTok"
+                            : "Tray"
+                    }
                     radius={[12, 12, 4, 4]}
-                    fill={barKey === "shopee" ? CHANNEL_COLORS[0] : barKey === "tiktok" ? CHANNEL_COLORS[1] : "#2563EB"}
+                    fill={barKey === "total" ? "#2563EB" : CHANNEL_COLORS[barKey] ?? "#2563EB"}
                   />
                 </BarChart>
               </ResponsiveContainer>
@@ -327,9 +353,11 @@ export default function DashboardBI() {
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie data={data.byChannel} cx="50%" cy="45%" innerRadius={62} outerRadius={92} paddingAngle={4} dataKey="value">
-                    {data.byChannel.map((_, idx) => (
-                      <Cell key={idx} fill={CHANNEL_COLORS[idx % CHANNEL_COLORS.length]} stroke="none" />
-                    ))}
+                    {data.byChannel.map((channel, idx) => {
+                      const color =
+                        CHANNEL_COLORS[channel.name.toLowerCase()] ?? PIE_COLORS[idx % PIE_COLORS.length];
+                      return <Cell key={idx} fill={color} stroke="none" />;
+                    })}
                   </Pie>
                   <Tooltip formatter={(value: any, name: any) => [formatMoney(Number(value || 0)), name]} />
                   <Legend verticalAlign="bottom" height={36} />
@@ -354,20 +382,30 @@ export default function DashboardBI() {
                 <AreaChart data={data.byMonth} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="sh" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={CHANNEL_COLORS[0]} stopOpacity={0.22} />
-                      <stop offset="95%" stopColor={CHANNEL_COLORS[0]} stopOpacity={0} />
+                      <stop offset="5%" stopColor={CHANNEL_COLORS.shopee} stopOpacity={0.22} />
+                      <stop offset="95%" stopColor={CHANNEL_COLORS.shopee} stopOpacity={0} />
                     </linearGradient>
                     <linearGradient id="tt" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={CHANNEL_COLORS[1]} stopOpacity={0.18} />
-                      <stop offset="95%" stopColor={CHANNEL_COLORS[1]} stopOpacity={0} />
+                      <stop offset="5%" stopColor={CHANNEL_COLORS.tiktok} stopOpacity={0.18} />
+                      <stop offset="95%" stopColor={CHANNEL_COLORS.tiktok} stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="tr" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={CHANNEL_COLORS.tray} stopOpacity={0.18} />
+                      <stop offset="95%" stopColor={CHANNEL_COLORS.tray} stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
                   <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#64748B", fontSize: 12 }} />
                   <YAxis axisLine={false} tickLine={false} tick={{ fill: "#64748B", fontSize: 12 }} tickFormatter={(v) => formatCompact(Number(v))} />
-                  <Tooltip formatter={(value: any, name: any) => [formatMoney(Number(value || 0)), name === "shopee" ? "Shopee" : "TikTok"]} />
-                  <Area type="monotone" dataKey="shopee" stroke={CHANNEL_COLORS[0]} strokeWidth={3} fill="url(#sh)" dot={false} />
-                  <Area type="monotone" dataKey="tiktok" stroke={CHANNEL_COLORS[1]} strokeWidth={3} fill="url(#tt)" dot={false} />
+                  <Tooltip
+                    formatter={(value: any, name: any) => [
+                      formatMoney(Number(value || 0)),
+                      name === "shopee" ? "Shopee" : name === "tiktok" ? "TikTok" : "Tray",
+                    ]}
+                  />
+                  <Area type="monotone" dataKey="shopee" stroke={CHANNEL_COLORS.shopee} strokeWidth={3} fill="url(#sh)" dot={false} />
+                  <Area type="monotone" dataKey="tiktok" stroke={CHANNEL_COLORS.tiktok} strokeWidth={3} fill="url(#tt)" dot={false} />
+                  <Area type="monotone" dataKey="tray" stroke={CHANNEL_COLORS.tray} strokeWidth={3} fill="url(#tr)" dot={false} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>

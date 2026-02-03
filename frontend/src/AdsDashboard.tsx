@@ -19,7 +19,7 @@ function fmtMoney(v: number) {
   return Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-export default function AdsDashboard() {
+export default function AdsDashboard(): JSX.Element {
   const [data, setData] = useState<AdsDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -28,7 +28,7 @@ export default function AdsDashboard() {
   const [to, setTo] = useState<string>("");
 
   const totalsByChannel = useMemo(() => {
-    if (!data) return [];
+    if (!data) return [] as ChannelRow[];
     const map = new Map<string, { revenue: number; spend: number }>();
     for (const m of data.byMonth) {
       for (const c of m.byChannel) {
@@ -36,7 +36,8 @@ export default function AdsDashboard() {
         map.set(c.channel, { revenue: prev.revenue + c.revenue, spend: prev.spend + c.spend });
       }
     }
-    return [...map.entries()]
+
+    return Array.from(map.entries())
       .map(([channel, v]) => ({ channel, revenue: v.revenue, spend: v.spend, roas: v.spend > 0 ? v.revenue / v.spend : null }))
       .sort((a, b) => (b.revenue || 0) - (a.revenue || 0));
   }, [data]);
@@ -67,8 +68,10 @@ export default function AdsDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (loading) return <div className={cn(UI.bg, "min-h-screen flex items-center justify-center text-slate-500")}>Carregando...</div>;
-  if (!data) return <div className={cn(UI.bg, "min-h-screen flex items-center justify-center text-red-600")}>{message || "Erro."}</div>;
+  if (loading)
+    return <div className={cn(UI.bg, "min-h-screen flex items-center justify-center text-slate-500")}>Carregando...</div>;
+  if (!data)
+    return <div className={cn(UI.bg, "min-h-screen flex items-center justify-center text-red-600")}>{message || "Erro."}</div>;
 
   return (
     <div className={cn(UI.bg, "min-h-screen")}>
@@ -200,4 +203,3 @@ export default function AdsDashboard() {
     </div>
   );
 }
-
