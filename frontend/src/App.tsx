@@ -7,6 +7,7 @@ import AdsDashboard from './AdsDashboard';
 import Products from './Products';
 import Simulation from './Simulation';
 import PaymentTypeFees from './PaymentTypeFees';
+import Stock from './Stock';
 
 const API_URL = 'http://localhost:4000';
 
@@ -31,7 +32,7 @@ interface Sale {
 
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'products' | 'payment_type_fees' | 'simulation'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation'>('upload');
 
   // --- LÓGICA DA TELA DE UPLOAD ---
   const [file, setFile] = useState<File | null>(null);
@@ -161,7 +162,9 @@ function App() {
                           ? 'Produtos'
                           : currentView === 'payment_type_fees'
                             ? 'Taxas Tray'
-                            : 'Simulação'}
+                            : currentView === 'stock'
+                              ? 'Estoque'
+                              : 'Simulação'}
               </h1>
               <p className="mt-1 text-white/80 text-sm">Shopee + TikTok + Tray • Importação e visualização</p>
             </div>
@@ -223,6 +226,15 @@ function App() {
                 Taxas Tray
               </button>
               <button
+                onClick={() => setCurrentView('stock')}
+                className={cn(
+                  'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                  currentView === 'stock' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                )}
+              >
+                Estoque
+              </button>
+              <button
                 onClick={() => setCurrentView('simulation')}
                 className={cn(
                   'px-4 py-2 rounded-xl text-sm font-extrabold transition',
@@ -247,6 +259,8 @@ function App() {
         <Products />
       ) : currentView === 'payment_type_fees' ? (
         <PaymentTypeFees />
+      ) : currentView === 'stock' ? (
+        <Stock />
       ) : currentView === 'simulation' ? (
         <Simulation />
       ) : (

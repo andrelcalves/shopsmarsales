@@ -58,7 +58,51 @@ model Product {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  orderItems OrderItem[]
+  orderItems       OrderItem[]
+  stock            ProductStock?
+  productGroupItem ProductGroupItem?
+}
+
+model ProductGroup {
+  id        Int      @id @default(autoincrement())
+  name      String   // Nome consolidado do grupo (ex: "Legging Empina Bumbum")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items ProductGroupItem[]
+  stock ProductGroupStock?
+}
+
+model ProductGroupItem {
+  id             Int         @id @default(autoincrement())
+  productGroupId Int
+  productId      Int         @unique  // cada produto pertence a no máximo um grupo
+  productGroup   ProductGroup @relation(fields: [productGroupId], references: [id], onDelete: Cascade)
+  product        Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productGroupId])
+}
+
+model ProductGroupStock {
+  id             Int         @id @default(autoincrement())
+  productGroupId Int         @unique
+  quantity       Int         @default(0)
+  updatedAt      DateTime    @updatedAt
+  productGroup   ProductGroup @relation(fields: [productGroupId], references: [id], onDelete: Cascade)
+}
+
+model InventoryConfig {
+  id             Int      @id @default(autoincrement())
+  stockStartDate DateTime
+  updatedAt      DateTime @updatedAt
+}
+
+model ProductStock {
+  id        Int      @id @default(autoincrement())
+  productId Int      @unique
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity  Int      @default(0)
+  updatedAt DateTime @updatedAt
 }
 
 model AdSpend {

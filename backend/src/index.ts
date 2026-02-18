@@ -1090,6 +1090,409 @@ async function main() {
     }
   });
 
+  // --- Estoque (data inicial + baixa por vendas + projeção) ---
+  const prismaAny = prisma as any;
+
+  app.get('/api/inventory-config', async (_req, res) => {
+    try {
+      const row = await prismaAny.inventoryConfig.findFirst({ orderBy: { id: 'desc' } });
+      if (!row) return res.status(200).json({ stockStartDate: null });
+      const d = new Date(row.stockStartDate);
+      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      return res.status(200).json({ stockStartDate: dateStr });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar config de estoque.' });
+    }
+  });
+
+  app.post('/api/inventory-config', async (req, res) => {
+    try {
+      const { stockStartDate } = req.body ?? {};
+      const dateStr = String(stockStartDate ?? '').trim();
+      if (!dateStr) return res.status(400).json({ message: 'stockStartDate obrigatório (YYYY-MM-DD).' });
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return res.status(400).json({ message: 'Data inválida.' });
+      const existing = await prismaAny.inventoryConfig.findFirst({ orderBy: { id: 'desc' } });
+      if (existing) {
+        await prismaAny.inventoryConfig.update({
+          where: { id: existing.id },
+          data: { stockStartDate: d },
+        });
+      } else {
+        await prismaAny.inventoryConfig.create({ data: { stockStartDate: d } });
+      }
+      return res.status(200).json({ stockStartDate: dateStr });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao salvar config de estoque.' });
+    }
+  });
+
+  // Grupos de produtos (consolidar estoque quando o mesmo produto tem nomes diferentes nos canais)
+  app.get('/api/product-groups', async (_req, res) => {
+    try {
+      const prismaAny = prisma as any;
+      if (!prismaAny.productGroup) return res.status(200).json([]);
+      const groups = await prismaAny.productGroup.findMany({
+        include: {
+          items: { include: { product: true } },
+          stock: true,
+        },
+        orderBy: { id: 'asc' },
+      });
+      return res.status(200).json(groups);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar grupos de produtos.' });
+    }
+  });
+
+  app.post('/api/product-groups', async (req, res) => {
+    try {
+      const prismaAny = prisma as any;
+      if (!prismaAny.productGroup) return res.status(500).json({ message: 'Model ProductGroup não disponível.' });
+      const { name, productIds } = req.body ?? {};
+      const nameStr = typeof name === 'string' ? name.trim() : '';
+      const ids = Array.isArray(productIds) ? productIds.map((x: unknown) => parseInt(String(x), 10)).filter((n: number) => Number.isInteger(n) && n > 0) : [];
+      if (!nameStr) return res.status(400).json({ message: 'Nome do grupo é obrigatório.' });
+      if (ids.length < 2) return res.status(400).json({ message: 'Selecione pelo menos 2 produtos para formar um grupo.' });
+      const group = await prismaAny.productGroup.create({
+        data: { name: nameStr },
+      });
+      for (const pid of ids) {
+        await prismaAny.productGroupItem.create({ data: { productGroupId: group.id, productId: pid } });
+      }
+      const created = await prismaAny.productGroup.findUnique({
+        where: { id: group.id },
+        include: { items: { include: { product: true } }, stock: true },
+      });
+      return res.status(201).json(created);
+    } catch (e: any) {
+      if (e?.code === 'P2002') return res.status(400).json({ message: 'Um dos produtos já pertence a outro grupo.' });
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao criar grupo.' });
+    }
+  });
+
+  app.patch('/api/product-groups/:id', async (req, res) => {
+    try {
+      const prismaAny = prisma as any;
+      const gid = parseInt(req.params.id, 10);
+      if (!Number.isInteger(gid) || gid <= 0) return res.status(400).json({ message: 'ID do grupo inválido.' });
+      const { name, productIds } = req.body ?? {};
+      const updates: { name?: string; items?: { deleteMany: {}; create: { productGroupId: number; productId: number }[] } } = {};
+      if (typeof name === 'string' && name.trim()) updates.name = name.trim();
+      if (Array.isArray(productIds)) {
+        const ids = productIds.map((x: unknown) => parseInt(String(x), 10)).filter((n: number) => Number.isInteger(n) && n > 0);
+        if (ids.length >= 2) {
+          await prismaAny.productGroupItem.deleteMany({ where: { productGroupId: gid } });
+          for (const pid of ids) {
+            await prismaAny.productGroupItem.create({ data: { productGroupId: gid, productId: pid } });
+          }
+        }
+      }
+      if (Object.keys(updates).length === 0) {
+        const g = await prismaAny.productGroup.findUnique({ where: { id: gid }, include: { items: { include: { product: true } }, stock: true } });
+        return res.status(200).json(g);
+      }
+      if (updates.name) await prismaAny.productGroup.update({ where: { id: gid }, data: { name: updates.name } });
+      const updated = await prismaAny.productGroup.findUnique({
+        where: { id: gid },
+        include: { items: { include: { product: true } }, stock: true },
+      });
+      return res.status(200).json(updated);
+    } catch (e: any) {
+      if (e?.code === 'P2002') return res.status(400).json({ message: 'Um dos produtos já pertence a outro grupo.' });
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao atualizar grupo.' });
+    }
+  });
+
+  app.delete('/api/product-groups/:id', async (req, res) => {
+    try {
+      const prismaAny = prisma as any;
+      const gid = parseInt(req.params.id, 10);
+      if (!Number.isInteger(gid) || gid <= 0) return res.status(400).json({ message: 'ID do grupo inválido.' });
+      await prismaAny.productGroup.delete({ where: { id: gid } });
+      return res.status(204).send();
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao excluir grupo.' });
+    }
+  });
+
+  app.put('/api/product-group-stock', async (req, res) => {
+    try {
+      const prismaAny = prisma as any;
+      const { productGroupId, quantity } = req.body ?? {};
+      const gid = productGroupId != null ? parseInt(String(productGroupId), 10) : NaN;
+      const qty = quantity != null ? parseInt(String(quantity), 10) : 0;
+      if (!Number.isInteger(gid) || gid <= 0) return res.status(400).json({ message: 'productGroupId inválido.' });
+      const row = await prismaAny.productGroupStock.upsert({
+        where: { productGroupId: gid },
+        update: { quantity: qty },
+        create: { productGroupId: gid, quantity: qty },
+      });
+      return res.status(200).json(row);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao salvar estoque do grupo.' });
+    }
+  });
+
+  app.get('/api/product-stock', async (_req, res) => {
+    try {
+      const rows = await prismaAny.productStock.findMany({
+        include: { product: true },
+        orderBy: { productId: 'asc' },
+      });
+      return res.status(200).json(rows);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar estoque por produto.' });
+    }
+  });
+
+  app.put('/api/product-stock', async (req, res) => {
+    try {
+      const { productId, quantity } = req.body ?? {};
+      const pid = productId != null ? parseInt(String(productId), 10) : NaN;
+      const qty = quantity != null ? parseInt(String(quantity), 10) : 0;
+      if (!Number.isInteger(pid) || pid <= 0) return res.status(400).json({ message: 'productId inválido.' });
+      const row = await prismaAny.productStock.upsert({
+        where: { productId: pid },
+        update: { quantity: qty },
+        create: { productId: pid, quantity: qty },
+      });
+      return res.status(200).json(row);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao salvar estoque do produto.' });
+    }
+  });
+
+  function isOrderValidForStock(o: any): boolean {
+    const st = String(o.status || '').toLowerCase();
+    if (st.includes('cancelado')) return false;
+    if (st.includes('não pago') || st.includes('nao pago')) return false;
+    return true;
+  }
+
+  app.get('/api/stock-current', async (_req, res) => {
+    try {
+      const config = await prismaAny.inventoryConfig.findFirst({ orderBy: { id: 'desc' } });
+      const stockStartDate = config ? new Date(config.stockStartDate) : null;
+
+      const ordersSince = stockStartDate
+        ? await prisma.order.findMany({
+            where: { orderDate: { gte: stockStartDate } },
+            include: { items: true },
+          })
+        : [];
+
+      const soldByProduct = new Map<number, number>();
+      for (const o of ordersSince) {
+        if (!isOrderValidForStock(o)) continue;
+        for (const item of o.items) {
+          const pid = item.productId;
+          if (pid == null) continue;
+          soldByProduct.set(pid, (soldByProduct.get(pid) || 0) + (item.quantity || 0));
+        }
+      }
+
+      const result: any[] = [];
+      const productIdsInGroup = new Set<number>();
+
+      if (prismaAny.productGroup) {
+        const allGroupItems = await prismaAny.productGroupItem.findMany({
+          include: { productGroup: true, product: true },
+        });
+        allGroupItems.forEach((gi: any) => productIdsInGroup.add(gi.productId));
+
+        const groupStockRows = await prismaAny.productGroupStock.findMany({
+          include: {
+            productGroup: {
+              include: { items: { include: { product: true } } },
+            },
+          },
+          orderBy: { productGroupId: 'asc' },
+        });
+        for (const gs of groupStockRows) {
+          const group = gs.productGroup;
+          const productIds = (group?.items ?? []).map((i: any) => i.productId);
+          const sold = productIds.reduce((sum: number, pid: number) => sum + (soldByProduct.get(pid) || 0), 0);
+          const opening = gs.quantity || 0;
+          const current = Math.max(0, opening - sold);
+          const firstProduct = group?.items?.[0]?.product;
+          result.push({
+            type: 'group',
+            productGroupId: gs.productGroupId,
+            productId: null,
+            code: null,
+            name: group?.name ?? 'Grupo',
+            opening,
+            sold,
+            current,
+            costPrice: firstProduct?.costPrice ?? null,
+            productNames: (group?.items ?? []).map((i: any) => i.product?.name).filter(Boolean),
+          });
+        }
+      }
+
+      const stockRows = await prismaAny.productStock.findMany({
+        include: { product: true },
+        orderBy: { productId: 'asc' },
+      });
+      for (const r of stockRows) {
+        if (productIdsInGroup.has(r.productId)) continue;
+        const opening = r.quantity || 0;
+        const sold = soldByProduct.get(r.productId) || 0;
+        const current = Math.max(0, opening - sold);
+        result.push({
+          type: 'product',
+          productGroupId: null,
+          productId: r.productId,
+          code: r.product?.code,
+          name: r.product?.name,
+          opening,
+          sold,
+          current,
+          costPrice: r.product?.costPrice,
+        });
+      }
+
+      result.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+      return res.status(200).json({
+        stockStartDate: stockStartDate ? stockStartDate.toISOString().slice(0, 10) : null,
+        items: result,
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao calcular estoque atual.' });
+    }
+  });
+
+  app.get('/api/stock-projection', async (_req, res) => {
+    try {
+      const config = await prismaAny.inventoryConfig.findFirst({ orderBy: { id: 'desc' } });
+      const stockStartDate = config ? new Date(config.stockStartDate) : null;
+
+      const orderItems = await prisma.orderItem.findMany({
+        where: { productId: { not: null } },
+        select: { productId: true, unitPrice: true },
+      });
+      const avgPriceByProduct = new Map<number, number>();
+      const countByProduct = new Map<number, number>();
+      for (const i of orderItems) {
+        const pid = i.productId!;
+        const prevSum = avgPriceByProduct.get(pid) || 0;
+        const prevCount = countByProduct.get(pid) || 0;
+        avgPriceByProduct.set(pid, prevSum + (i.unitPrice || 0));
+        countByProduct.set(pid, prevCount + 1);
+      }
+      for (const [pid, sum] of avgPriceByProduct) {
+        const c = countByProduct.get(pid) || 1;
+        avgPriceByProduct.set(pid, c > 0 ? sum / c : 0);
+      }
+
+      const ordersSince = stockStartDate
+        ? await prisma.order.findMany({
+            where: { orderDate: { gte: stockStartDate } },
+            include: { items: true },
+          })
+        : [];
+      const soldByProduct = new Map<number, number>();
+      for (const o of ordersSince) {
+        if (!isOrderValidForStock(o)) continue;
+        for (const item of o.items) {
+          const pid = item.productId;
+          if (pid == null) continue;
+          soldByProduct.set(pid, (soldByProduct.get(pid) || 0) + (item.quantity || 0));
+        }
+      }
+
+      let projectedRevenue = 0;
+      let projectedCost = 0;
+      const details: any[] = [];
+      const productIdsInGroup = new Set<number>();
+
+      if (prismaAny.productGroupItem) {
+        const allGroupItems = await prismaAny.productGroupItem.findMany({});
+        allGroupItems.forEach((gi: any) => productIdsInGroup.add(gi.productId));
+      }
+      if (prismaAny.productGroupStock) {
+        const groupStockRows = await prismaAny.productGroupStock.findMany({
+          include: {
+            productGroup: {
+              include: { items: { include: { product: true } } },
+            },
+          },
+        });
+        for (const gs of groupStockRows) {
+          const group = gs.productGroup;
+          const productIds = (group?.items ?? []).map((i: any) => i.productId);
+          const sold = productIds.reduce((sum: number, pid: number) => sum + (soldByProduct.get(pid) || 0), 0);
+          const opening = gs.quantity || 0;
+          const current = Math.max(0, opening - sold);
+          const items = group?.items ?? [];
+          const avgUnitPrice =
+            items.length > 0
+              ? items.reduce((s: number, i: any) => s + (avgPriceByProduct.get(i.productId) ?? i.product?.costPrice ?? 0), 0) / items.length
+              : 0;
+          const costPrice = items[0]?.product?.costPrice ?? 0;
+          const unitPrice = avgUnitPrice || costPrice || 0;
+          projectedRevenue += current * unitPrice;
+          projectedCost += current * costPrice;
+          details.push({
+            type: 'group',
+            productGroupId: gs.productGroupId,
+            productId: null,
+            name: group?.name ?? 'Grupo',
+            current,
+            unitPrice,
+            revenue: Math.round(current * unitPrice * 100) / 100,
+          });
+        }
+      }
+
+      const stockRows = await prismaAny.productStock.findMany({
+        include: { product: true },
+      });
+      for (const r of stockRows) {
+        if (productIdsInGroup.has(r.productId)) continue;
+        const opening = r.quantity || 0;
+        const sold = soldByProduct.get(r.productId) || 0;
+        const current = Math.max(0, opening - sold);
+        const costPrice = r.product?.costPrice ?? 0;
+        const avgUnitPrice = avgPriceByProduct.get(r.productId) ?? costPrice ?? 0;
+        const unitPrice = avgUnitPrice || costPrice || 0;
+        projectedRevenue += current * unitPrice;
+        projectedCost += current * costPrice;
+        details.push({
+          type: 'product',
+          productGroupId: null,
+          productId: r.productId,
+          name: r.product?.name,
+          current,
+          unitPrice,
+          revenue: Math.round(current * unitPrice * 100) / 100,
+        });
+      }
+
+      return res.status(200).json({
+        stockStartDate: stockStartDate ? stockStartDate.toISOString().slice(0, 10) : null,
+        projectedRevenue: Math.round(projectedRevenue * 100) / 100,
+        projectedCost: Math.round(projectedCost * 100) / 100,
+        details,
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao calcular projeção.' });
+    }
+  });
+
   // Simulação P&L por mês e canal
   // GET /api/simulation?month=2026-01&channel=shopee|tiktok|tray|all&fixedCost=2459&cardPixPercent=3.63
   app.get('/api/simulation', async (req, res) => {
