@@ -25,6 +25,22 @@ function pick(row: Record<string, unknown>, keys: string[]) {
   return undefined;
 }
 
+/** Parsea YYYY-MM-DD como meio-dia UTC para não perder um dia em fusos como Brasil. */
+function parseDateOnlyAsNoonUTC(dateStr: string | null | undefined): Date | null {
+  if (dateStr == null || String(dateStr).trim() === '') return null;
+  const s = String(dateStr).trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (match) {
+    const year = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10) - 1;
+    const day = parseInt(match[3], 10);
+    const d = new Date(Date.UTC(year, month, day, 12, 0, 0, 0));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 function parseBrNumber(v: unknown): number {
   if (v === null || v === undefined) return 0;
   if (typeof v === 'number') return v;
@@ -1374,6 +1390,259 @@ async function main() {
     }
   });
 
+    // --- Contas a pagar (Bills) ---
+  const updateBillStatus = async (billId: number) => {
+    const prismaAny = prisma as any;
+    const bill = await prismaAny.bill.findUnique({
+      where: { id: billId },
+      include: { payments: true },
+    });
+    if (!bill) return;
+    const totalPaid = (bill.payments || []).reduce(
+      (s: number, p: any) => s + (p.paidAt != null ? (p.amount || 0) : 0),
+      0
+    );
+    let status = 'pending';
+    if (totalPaid >= bill.totalAmount) status = 'paid';
+    else if (totalPaid > 0) status = 'partial';
+    await prismaAny.bill.update({
+      where: { id: billId },
+      data: { status },
+    });
+  };
+
+  app.get('/api/bills', async (req, res) => {
+    try {
+      const status = typeof req.query.status === 'string' ? req.query.status.trim() : undefined;
+      const prismaAny = prisma as any;
+      const where: any = status ? { status } : {};
+      const bills = await prismaAny.bill.findMany({
+        where,
+        include: { payments: { orderBy: { dueDate: 'asc' } } },
+        orderBy: { createdAt: 'desc' },
+      });
+      return res.status(200).json(bills);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar contas a pagar.' });
+    }
+  });
+
+  app.get('/api/bills/:id', async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id), 10);
+      if (isNaN(id)) return res.status(400).json({ message: 'ID inválido.' });
+      const prismaAny = prisma as any;
+      const bill = await prismaAny.bill.findUnique({
+        where: { id },
+        include: { payments: { orderBy: { dueDate: 'asc' } } },
+      });
+      if (!bill) return res.status(404).json({ message: 'Conta não encontrada.' });
+      return res.status(200).json(bill);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar conta.' });
+    }
+  });
+
+  app.post('/api/bills', async (req, res) => {
+    try {
+      const description = String(req.body?.description ?? '').trim();
+      const invoiceNumber = req.body?.invoiceNumber != null ? String(req.body.invoiceNumber).trim() || null : null;
+      const totalAmount = parseBrNumber(req.body?.totalAmount);
+      const dueDateStr = req.body?.dueDate ? String(req.body.dueDate).trim() : null;
+      if (!description) return res.status(400).json({ message: 'Descrição obrigatória.' });
+      if (totalAmount <= 0) return res.status(400).json({ message: 'Valor total deve ser maior que zero.' });
+
+      const dueDate = parseDateOnlyAsNoonUTC(dueDateStr);
+
+      const prismaAny = prisma as any;
+      const bill = await prismaAny.bill.create({
+        data: { description, invoiceNumber, totalAmount, dueDate, status: 'pending' },
+      });
+      return res.status(200).json(bill);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao criar conta a pagar.' });
+    }
+  });
+
+  app.patch('/api/bills/:id', async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id), 10);
+      if (isNaN(id)) return res.status(400).json({ message: 'ID inválido.' });
+      const description = req.body?.description != null ? String(req.body.description).trim() : undefined;
+      const invoiceNumber = req.body?.invoiceNumber !== undefined ? (req.body.invoiceNumber ? String(req.body.invoiceNumber).trim() || null : null) : undefined;
+      const totalAmount = req.body?.totalAmount != null ? parseBrNumber(req.body.totalAmount) : undefined;
+      const dueDateStr = req.body?.dueDate;
+
+      let dueDate: Date | null | undefined = undefined;
+      if (dueDateStr !== undefined) {
+        dueDate = dueDateStr === null || dueDateStr === '' ? null : parseDateOnlyAsNoonUTC(dueDateStr) ?? undefined;
+      }
+
+      const prismaAny = prisma as any;
+      const data: any = {};
+      if (description !== undefined) data.description = description;
+      if (invoiceNumber !== undefined) data.invoiceNumber = invoiceNumber;
+      if (totalAmount !== undefined) data.totalAmount = totalAmount;
+      if (dueDate !== undefined) data.dueDate = dueDate;
+      const bill = await prismaAny.bill.update({ where: { id }, data });
+      await updateBillStatus(id);
+      const updated = await prismaAny.bill.findUnique({
+        where: { id },
+        include: { payments: { orderBy: { dueDate: 'asc' } } },
+      });
+      return res.status(200).json(updated);
+    } catch (e: any) {
+      if (String(e?.code) === 'P2025') return res.status(404).json({ message: 'Conta não encontrada.' });
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao atualizar conta.' });
+    }
+  });
+
+  app.delete('/api/bills/:id', async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id), 10);
+      if (isNaN(id)) return res.status(400).json({ message: 'ID inválido.' });
+      const prismaAny = prisma as any;
+      await prismaAny.bill.delete({ where: { id } });
+      return res.status(200).json({ message: 'Removido com sucesso.' });
+    } catch (e: any) {
+      if (String(e?.code) === 'P2025') return res.status(404).json({ message: 'Conta não encontrada.' });
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao remover conta.' });
+    }
+  });
+
+  app.post('/api/bills/:id/payments', async (req, res) => {
+    try {
+      const billId = parseInt(String(req.params.id), 10);
+      if (isNaN(billId)) return res.status(400).json({ message: 'ID da conta inválido.' });
+      const amount = parseBrNumber(req.body?.amount);
+      const dueDateStr = String(req.body?.dueDate ?? '').trim();
+      const paidAtStr = req.body?.paidAt ? String(req.body.paidAt).trim() : null;
+      const notes = String(req.body?.notes ?? '').trim();
+      if (amount <= 0) return res.status(400).json({ message: 'Valor da parcela deve ser maior que zero.' });
+      const dueDate = parseDateOnlyAsNoonUTC(dueDateStr);
+      if (!dueDate) return res.status(400).json({ message: 'Data de vencimento inválida (use YYYY-MM-DD).' });
+      const paidAt = parseDateOnlyAsNoonUTC(paidAtStr);
+
+
+      const prismaAny = prisma as any;
+      await prismaAny.billPayment.create({
+        data: { billId, amount, dueDate, paidAt, notes },
+      });
+      await updateBillStatus(billId);
+      const bill = await prismaAny.bill.findUnique({
+        where: { id: billId },
+        include: { payments: { orderBy: { dueDate: 'asc' } } },
+      });
+      return res.status(200).json(bill);
+    } catch (e: any) {
+      if (String(e?.code) === 'P2003') return res.status(404).json({ message: 'Conta não encontrada.' });
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao registrar parcela.' });
+    }
+  });
+
+  // Gerar parcelas (até 4 ou mais vencimentos): body { installments: [ { dueDate, amount }, ... ] }
+  app.post('/api/bills/:id/installments', async (req, res) => {
+    try {
+      const billId = parseInt(String(req.params.id), 10);
+      if (isNaN(billId)) return res.status(400).json({ message: 'ID da conta inválido.' });
+      const installments = req.body?.installments;
+      if (!Array.isArray(installments) || installments.length === 0) {
+        return res.status(400).json({ message: 'Envie installments: [ { dueDate, amount }, ... ] com ao menos uma parcela.' });
+      }
+
+      const prismaAny = prisma as any;
+      const bill = await prismaAny.bill.findUnique({ where: { id: billId } });
+      if (!bill) return res.status(404).json({ message: 'Conta não encontrada.' });
+
+      for (const item of installments) {
+        const dueDateStr = String(item?.dueDate ?? '').trim();
+        const amount = parseBrNumber(item?.amount);
+        if (amount <= 0) continue;
+        const dueDate = parseDateOnlyAsNoonUTC(dueDateStr);
+        if (!dueDate) continue;
+        await prismaAny.billPayment.create({
+          data: { billId, amount, dueDate, paidAt: null, notes: '' },
+        });
+      }
+      await updateBillStatus(billId);
+      const updated = await prismaAny.bill.findUnique({
+        where: { id: billId },
+        include: { payments: { orderBy: { dueDate: 'asc' } } },
+      });
+      return res.status(200).json(updated);
+    } catch (e: any) {
+      if (String(e?.code) === 'P2003') return res.status(404).json({ message: 'Conta não encontrada.' });
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao gerar parcelas.' });
+    }
+  });
+
+  app.patch('/api/bills/:id/payments/:paymentId', async (req, res) => {
+    try {
+      const billId = parseInt(String(req.params.id), 10);
+      const paymentId = parseInt(String(req.params.paymentId), 10);
+      if (isNaN(billId) || isNaN(paymentId)) return res.status(400).json({ message: 'IDs inválidos.' });
+      const amount = req.body?.amount != null ? parseBrNumber(req.body.amount) : undefined;
+      const dueDateStr = req.body?.dueDate;
+      const paidAtStr = req.body?.paidAt;
+      const notes = req.body?.notes !== undefined ? String(req.body.notes).trim() : undefined;
+      let dueDate: Date | undefined;
+      if (dueDateStr != null) {
+        const d = parseDateOnlyAsNoonUTC(dueDateStr);
+        if (d) dueDate = d;
+      }
+      let paidAt: Date | null | undefined = undefined;
+      if (paidAtStr !== undefined) {
+        paidAt = paidAtStr === null || paidAtStr === '' ? null : parseDateOnlyAsNoonUTC(paidAtStr) ?? undefined;
+      }
+
+      const prismaAny = prisma as any;
+      const data: any = {};
+      if (amount !== undefined) data.amount = amount;
+      if (dueDate !== undefined) data.dueDate = dueDate;
+      if (paidAt !== undefined) data.paidAt = paidAt;
+      if (notes !== undefined) data.notes = notes;
+      await prismaAny.billPayment.updateMany({
+        where: { id: paymentId, billId },
+        data,
+      });
+      await updateBillStatus(billId);
+      const bill = await prismaAny.bill.findUnique({
+        where: { id: billId },
+        include: { payments: { orderBy: { dueDate: 'asc' } } },
+      });
+      return res.status(200).json(bill);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao atualizar parcela.' });
+    }
+  });
+
+  app.delete('/api/bills/:id/payments/:paymentId', async (req, res) => {
+    try {
+      const billId = parseInt(String(req.params.id), 10);
+      const paymentId = parseInt(String(req.params.paymentId), 10);
+      if (isNaN(billId) || isNaN(paymentId)) return res.status(400).json({ message: 'IDs inválidos.' });
+      const prismaAny = prisma as any;
+      await prismaAny.billPayment.deleteMany({ where: { id: paymentId, billId } });
+      await updateBillStatus(billId);
+      const bill = await prismaAny.bill.findUnique({
+        where: { id: billId },
+        include: { payments: { orderBy: { dueDate: 'asc' } } },
+      });
+      return res.status(200).json(bill);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao remover parcela.' });
+    }
+  });
+
   app.get('/api/stock-projection', async (_req, res) => {
     try {
       const config = await prismaAny.inventoryConfig.findFirst({ orderBy: { id: 'desc' } });
@@ -1813,6 +2082,61 @@ app.get('/api/dashboard', async (_req, res) => {
     return res.status(500).json({ message: 'Erro ao gerar dashboard.' });
   }
 });
+
+  // Vendas por dia por canal: GET /api/sales-by-day?month=2026-02
+  app.get('/api/sales-by-day', async (req, res) => {
+    try {
+      const monthStr = String(req.query.month ?? '').trim();
+      const monthStart = monthStr ? monthStartFromYYYYMM(monthStr) : null;
+      const start = monthStart || new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      const end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+
+      const orders = await prisma.order.findMany({
+        where: {
+          orderDate: { gte: start, lt: end },
+          NOT: [
+            { status: { contains: 'ancelado', mode: 'insensitive' } },
+            { status: { contains: 'Não pago', mode: 'insensitive' } },
+          ],
+        },
+        select: { orderDate: true, source: true, totalPrice: true },
+      });
+
+      const byDay: Record<string, { shopee: number; tiktok: number; tray: number; total: number }> = {};
+      const dayKeys: string[] = [];
+      for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        byDay[key] = { shopee: 0, tiktok: 0, tray: 0, total: 0 };
+        dayKeys.push(key);
+      }
+
+      for (const o of orders) {
+        const d = new Date(o.orderDate);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        if (!byDay[key]) {
+          byDay[key] = { shopee: 0, tiktok: 0, tray: 0, total: 0 };
+          dayKeys.push(key);
+          dayKeys.sort();
+        }
+        const amt = o.totalPrice || 0;
+        byDay[key].total += amt;
+        if (o.source === 'shopee') byDay[key].shopee += amt;
+        else if (o.source === 'tiktok') byDay[key].tiktok += amt;
+        else if (o.source === 'tray') byDay[key].tray += amt;
+      }
+
+      const rows = dayKeys.map((k) => ({
+        date: k,
+        name: new Date(k + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+        ...byDay[k],
+      }));
+
+      return res.status(200).json(rows);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar vendas por dia.' });
+    }
+  });
 
   app.listen(APP_PORT, () => console.log(`Rodando em ${APP_PORT}`));
 }

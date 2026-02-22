@@ -130,3 +130,27 @@ model PaymentTypeFee {
   @@unique([month, channel, paymentType])
   @@index([month, channel])
 }
+
+model Bill {
+  id            Int      @id @default(autoincrement())
+  description   String   // ex: "Fornecedor X - Lote Março"
+  invoiceNumber String?  // nota fiscal (opcional)
+  totalAmount   Float    // valor total da conta
+  dueDate       DateTime? // data limite (opcional)
+  status        String   @default("pending") // pending | partial | paid
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  payments      BillPayment[]
+}
+
+model BillPayment {
+  id        Int       @id @default(autoincrement())
+  billId    Int
+  bill      Bill      @relation(fields: [billId], references: [id], onDelete: Cascade)
+  amount    Float     // valor da parcela
+  dueDate   DateTime  @default(now()) // vencimento da parcela
+  paidAt    DateTime? // quando foi pago (null = pendente)
+  notes     String    @default("")
+  createdAt DateTime  @default(now())
+  @@index([billId])
+}
