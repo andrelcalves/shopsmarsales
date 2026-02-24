@@ -2102,11 +2102,11 @@ app.get('/api/dashboard', async (_req, res) => {
         select: { orderDate: true, source: true, totalPrice: true },
       });
 
-      const byDay: Record<string, { shopee: number; tiktok: number; tray: number; total: number }> = {};
+      const byDay: Record<string, { shopee: number; tiktok: number; tray: number; total: number; shopeeOrders: number; tiktokOrders: number; trayOrders: number; totalOrders: number }> = {};
       const dayKeys: string[] = [];
       for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        byDay[key] = { shopee: 0, tiktok: 0, tray: 0, total: 0 };
+        byDay[key] = { shopee: 0, tiktok: 0, tray: 0, total: 0, shopeeOrders: 0, tiktokOrders: 0, trayOrders: 0, totalOrders: 0 };
         dayKeys.push(key);
       }
 
@@ -2114,15 +2114,23 @@ app.get('/api/dashboard', async (_req, res) => {
         const d = new Date(o.orderDate);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         if (!byDay[key]) {
-          byDay[key] = { shopee: 0, tiktok: 0, tray: 0, total: 0 };
+          byDay[key] = { shopee: 0, tiktok: 0, tray: 0, total: 0, shopeeOrders: 0, tiktokOrders: 0, trayOrders: 0, totalOrders: 0 };
           dayKeys.push(key);
           dayKeys.sort();
         }
         const amt = o.totalPrice || 0;
         byDay[key].total += amt;
-        if (o.source === 'shopee') byDay[key].shopee += amt;
-        else if (o.source === 'tiktok') byDay[key].tiktok += amt;
-        else if (o.source === 'tray') byDay[key].tray += amt;
+        byDay[key].totalOrders += 1;
+        if (o.source === 'shopee') {
+          byDay[key].shopee += amt;
+          byDay[key].shopeeOrders += 1;
+        } else if (o.source === 'tiktok') {
+          byDay[key].tiktok += amt;
+          byDay[key].tiktokOrders += 1;
+        } else if (o.source === 'tray') {
+          byDay[key].tray += amt;
+          byDay[key].trayOrders += 1;
+        }
       }
 
       const rows = dayKeys.map((k) => ({

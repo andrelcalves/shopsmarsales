@@ -10,6 +10,7 @@ import PaymentTypeFees from './PaymentTypeFees';
 import Stock from './Stock';
 import BillsToPay from './BillsToPay';
 import SalesByDayDashboard from './SalesByDayDashboard';
+import BillsDashboard from './BillsDashboard';
 
 const API_URL = 'http://localhost:4000';
 
@@ -34,7 +35,7 @@ interface Sale {
 
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'bills_to_pay'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'bills_to_pay'>('upload');
 
   // --- LÓGICA DA TELA DE UPLOAD ---
   const [file, setFile] = useState<File | null>(null);
@@ -155,22 +156,24 @@ function App() {
                 {currentView === 'upload'
                   ? 'Upload & Lista'
                   : currentView === 'dashboard'
-                    ? 'Dashboard'
-                    : currentView === 'ads_dashboard'
-                      ? 'Dashboard ADS'
-                      : currentView === 'sales_by_day'
-                        ? 'Vendas por Dia'
-                        : currentView === 'ads_spend'
-                          ? 'Cadastro ADS'
-                          : currentView === 'products'
-                            ? 'Produtos'
-                            : currentView === 'payment_type_fees'
-                              ? 'Taxas Tray'
-                              : currentView === 'stock'
-                                ? 'Estoque'
-                                : currentView === 'bills_to_pay'
-                                  ? 'Contas a pagar'
-                                  : 'Simulação'}
+                    ? 'Vendas Geral'
+                    : currentView === 'sales_by_day'
+                      ? 'Vendas por Dia'
+                      : currentView === 'bills_dashboard'
+                        ? 'Contas a pagar'
+                        : currentView === 'ads_dashboard'
+                          ? 'Custo ADS'
+                          : currentView === 'ads_spend'
+                            ? 'Cadastro ADS'
+                            : currentView === 'products'
+                              ? 'Produtos'
+                              : currentView === 'payment_type_fees'
+                                ? 'Taxas Tray'
+                                : currentView === 'stock'
+                                  ? 'Estoque'
+                                  : currentView === 'bills_to_pay'
+                                    ? 'Cadastro contas'
+                                    : 'Simulação'}
               </h1>
               <p className="mt-1 text-white/80 text-sm">Shopee + TikTok + Tray • Importação e visualização</p>
             </div>
@@ -188,16 +191,7 @@ function App() {
                     currentView === 'dashboard' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
                   )}
                 >
-                  Dashboard
-                </button>
-                <button
-                  onClick={() => setCurrentView('ads_dashboard')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'ads_dashboard' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Dashboard ADS
+                  Vendas Geral
                 </button>
                 <button
                   onClick={() => setCurrentView('sales_by_day')}
@@ -207,6 +201,24 @@ function App() {
                   )}
                 >
                   Vendas por Dia
+                </button>
+                <button
+                  onClick={() => setCurrentView('bills_dashboard')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'bills_dashboard' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Contas a pagar
+                </button>
+                <button
+                  onClick={() => setCurrentView('ads_dashboard')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'ads_dashboard' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Custo ADS
                 </button>
               </div>
               {/* Cadastros */}
@@ -266,7 +278,7 @@ function App() {
                     currentView === 'bills_to_pay' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
                   )}
                 >
-                  Contas a pagar
+                  Cadastro contas
                 </button>
                 <button
                   onClick={() => setCurrentView('simulation')}
@@ -286,10 +298,12 @@ function App() {
       {/* Conteúdo */}
       {currentView === 'dashboard' ? (
         <Dashboard />
-      ) : currentView === 'ads_dashboard' ? (
-        <AdsDashboard />
       ) : currentView === 'sales_by_day' ? (
         <SalesByDayDashboard />
+      ) : currentView === 'bills_dashboard' ? (
+        <BillsDashboard />
+      ) : currentView === 'ads_dashboard' ? (
+        <AdsDashboard />
       ) : currentView === 'ads_spend' ? (
         <AdsSpend />
       ) : currentView === 'products' ? (

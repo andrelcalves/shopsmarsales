@@ -20,6 +20,10 @@ type DayRow = {
   tiktok: number;
   tray: number;
   total: number;
+  shopeeOrders: number;
+  tiktokOrders: number;
+  trayOrders: number;
+  totalOrders: number;
 };
 
 const CHANNEL_COLORS: Record<string, string> = {
@@ -80,8 +84,12 @@ export default function SalesByDayDashboard() {
       tiktok: acc.tiktok + r.tiktok,
       tray: acc.tray + r.tray,
       total: acc.total + r.total,
+      shopeeOrders: acc.shopeeOrders + (r.shopeeOrders ?? 0),
+      tiktokOrders: acc.tiktokOrders + (r.tiktokOrders ?? 0),
+      trayOrders: acc.trayOrders + (r.trayOrders ?? 0),
+      totalOrders: acc.totalOrders + (r.totalOrders ?? 0),
     }),
-    { shopee: 0, tiktok: 0, tray: 0, total: 0 }
+    { shopee: 0, tiktok: 0, tray: 0, total: 0, shopeeOrders: 0, tiktokOrders: 0, trayOrders: 0, totalOrders: 0 }
   );
 
   return (
@@ -122,18 +130,22 @@ export default function SalesByDayDashboard() {
             <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
               <div className="text-xs text-white/80 font-semibold">Total</div>
               <div className="text-lg font-black">{formatMoney(totals.total)}</div>
+              <div className="text-xs text-white/70 mt-0.5">{totals.totalOrders} pedidos</div>
             </div>
             <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
               <div className="text-xs text-white/80 font-semibold">Shopee</div>
               <div className="text-lg font-black">{formatMoney(totals.shopee)}</div>
+              <div className="text-xs text-white/70 mt-0.5">{totals.shopeeOrders} pedidos</div>
             </div>
             <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
               <div className="text-xs text-white/80 font-semibold">TikTok</div>
               <div className="text-lg font-black">{formatMoney(totals.tiktok)}</div>
+              <div className="text-xs text-white/70 mt-0.5">{totals.tiktokOrders} pedidos</div>
             </div>
             <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
               <div className="text-xs text-white/80 font-semibold">Tray</div>
               <div className="text-lg font-black">{formatMoney(totals.tray)}</div>
+              <div className="text-xs text-white/70 mt-0.5">{totals.trayOrders} pedidos</div>
             </div>
           </div>
         </div>
@@ -168,7 +180,13 @@ export default function SalesByDayDashboard() {
                       tickFormatter={(v) => formatCompact(Number(v))}
                     />
                     <Tooltip
-                      formatter={(value: any) => formatMoney(Number(value || 0))}
+                      formatter={(value: unknown, name?: string, item?: { payload?: DayRow }) => {
+                        const payload = item?.payload;
+                        const channelName = name ?? "";
+                        const orders = channelName === "Shopee" ? payload?.shopeeOrders : channelName === "TikTok" ? payload?.tiktokOrders : payload?.trayOrders;
+                        const label = typeof orders === "number" ? `${formatMoney(Number(value || 0))} (${orders} pedidos)` : formatMoney(Number(value || 0));
+                        return [label, channelName];
+                      }}
                       contentStyle={{
                         borderRadius: 14,
                         border: "1px solid #E2E8F0",
@@ -212,10 +230,22 @@ export default function SalesByDayDashboard() {
                     {rows.map((r) => (
                       <tr key={r.date} className="hover:bg-slate-50">
                         <td className="px-4 py-3 font-semibold text-slate-900">{r.name}</td>
-                        <td className="px-4 py-3 text-right text-slate-700">{formatMoney(r.shopee)}</td>
-                        <td className="px-4 py-3 text-right text-slate-700">{formatMoney(r.tiktok)}</td>
-                        <td className="px-4 py-3 text-right text-slate-700">{formatMoney(r.tray)}</td>
-                        <td className="px-4 py-3 text-right font-bold text-slate-900">{formatMoney(r.total)}</td>
+                        <td className="px-4 py-3 text-right text-slate-700">
+                          <span className="block">{formatMoney(r.shopee)}</span>
+                          <span className="text-xs text-slate-500">{(r.shopeeOrders ?? 0)} pedidos</span>
+                        </td>
+                        <td className="px-4 py-3 text-right text-slate-700">
+                          <span className="block">{formatMoney(r.tiktok)}</span>
+                          <span className="text-xs text-slate-500">{(r.tiktokOrders ?? 0)} pedidos</span>
+                        </td>
+                        <td className="px-4 py-3 text-right text-slate-700">
+                          <span className="block">{formatMoney(r.tray)}</span>
+                          <span className="text-xs text-slate-500">{(r.trayOrders ?? 0)} pedidos</span>
+                        </td>
+                        <td className="px-4 py-3 text-right font-bold text-slate-900">
+                          <span className="block">{formatMoney(r.total)}</span>
+                          <span className="text-xs font-normal text-slate-500">{(r.totalOrders ?? 0)} pedidos</span>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
