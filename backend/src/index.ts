@@ -1451,6 +1451,7 @@ async function main() {
       const invoiceNumber = req.body?.invoiceNumber != null ? String(req.body.invoiceNumber).trim() || null : null;
       const totalAmount = parseBrNumber(req.body?.totalAmount);
       const dueDateStr = req.body?.dueDate ? String(req.body.dueDate).trim() : null;
+      const isFixedCost = req.body?.isFixedCost === true || req.body?.isFixedCost === 'true';
       if (!description) return res.status(400).json({ message: 'Descrição obrigatória.' });
       if (totalAmount <= 0) return res.status(400).json({ message: 'Valor total deve ser maior que zero.' });
 
@@ -1458,7 +1459,7 @@ async function main() {
 
       const prismaAny = prisma as any;
       const bill = await prismaAny.bill.create({
-        data: { description, invoiceNumber, totalAmount, dueDate, status: 'pending' },
+        data: { description, invoiceNumber, totalAmount, dueDate, status: 'pending', isFixedCost },
       });
       return res.status(200).json(bill);
     } catch (e) {
@@ -1475,6 +1476,7 @@ async function main() {
       const invoiceNumber = req.body?.invoiceNumber !== undefined ? (req.body.invoiceNumber ? String(req.body.invoiceNumber).trim() || null : null) : undefined;
       const totalAmount = req.body?.totalAmount != null ? parseBrNumber(req.body.totalAmount) : undefined;
       const dueDateStr = req.body?.dueDate;
+      const isFixedCost = req.body?.isFixedCost;
 
       let dueDate: Date | null | undefined = undefined;
       if (dueDateStr !== undefined) {
@@ -1487,6 +1489,7 @@ async function main() {
       if (invoiceNumber !== undefined) data.invoiceNumber = invoiceNumber;
       if (totalAmount !== undefined) data.totalAmount = totalAmount;
       if (dueDate !== undefined) data.dueDate = dueDate;
+      if (isFixedCost !== undefined) data.isFixedCost = isFixedCost === true || isFixedCost === 'true';
       const bill = await prismaAny.bill.update({ where: { id }, data });
       await updateBillStatus(id);
       const updated = await prismaAny.bill.findUnique({

@@ -11,6 +11,7 @@ import Stock from './Stock';
 import BillsToPay from './BillsToPay';
 import SalesByDayDashboard from './SalesByDayDashboard';
 import BillsDashboard from './BillsDashboard';
+import Pricing from './Pricing';
 
 const API_URL = 'http://localhost:4000';
 
@@ -35,7 +36,7 @@ interface Sale {
 
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'bills_to_pay'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'bills_to_pay' | 'pricing'>('upload');
 
   // --- LÓGICA DA TELA DE UPLOAD ---
   const [file, setFile] = useState<File | null>(null);
@@ -173,7 +174,9 @@ function App() {
                                   ? 'Estoque'
                                   : currentView === 'bills_to_pay'
                                     ? 'Cadastro contas'
-                                    : 'Simulação'}
+                                    : currentView === 'pricing'
+                                      ? 'Precificação'
+                                      : 'Simulação'}
               </h1>
               <p className="mt-1 text-white/80 text-sm">Shopee + TikTok + Tray • Importação e visualização</p>
             </div>
@@ -281,6 +284,15 @@ function App() {
                   Cadastro contas
                 </button>
                 <button
+                  onClick={() => setCurrentView('pricing')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'pricing' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Precificação
+                </button>
+                <button
                   onClick={() => setCurrentView('simulation')}
                   className={cn(
                     'px-4 py-2 rounded-xl text-sm font-extrabold transition',
@@ -314,6 +326,8 @@ function App() {
         <Stock />
       ) : currentView === 'bills_to_pay' ? (
         <BillsToPay />
+      ) : currentView === 'pricing' ? (
+        <Pricing />
       ) : currentView === 'simulation' ? (
         <Simulation />
       ) : (

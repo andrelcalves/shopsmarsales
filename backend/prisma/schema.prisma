@@ -138,6 +138,7 @@ model Bill {
   totalAmount   Float    // valor total da conta
   dueDate       DateTime? // data limite (opcional)
   status        String   @default("pending") // pending | partial | paid
+  isFixedCost   Boolean  @default(false) // true = custo fixo (ex.: aluguel, folha)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   payments      BillPayment[]

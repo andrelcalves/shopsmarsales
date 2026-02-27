@@ -18,6 +18,7 @@ type Bill = {
   totalAmount: number;
   dueDate: string | null;
   status: string;
+  isFixedCost?: boolean;
   payments: BillPayment[];
 };
 
@@ -53,6 +54,7 @@ export default function BillsToPay() {
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [totalAmount, setTotalAmount] = useState("");
   const [dueDate, setDueDate] = useState("");
+  const [isFixedCost, setIsFixedCost] = useState(false);
 
   const [selectedBillId, setSelectedBillId] = useState<number | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -101,6 +103,7 @@ export default function BillsToPay() {
           invoiceNumber: invoiceNumber || null,
           totalAmount,
           dueDate: dueDate || null,
+          isFixedCost,
         }),
       });
       const data = await res.json();
@@ -110,6 +113,7 @@ export default function BillsToPay() {
       setInvoiceNumber("");
       setTotalAmount("");
       setDueDate("");
+      setIsFixedCost(false);
       fetchBills();
     } catch (err: any) {
       setMessage(`Erro: ${err.message}`);
@@ -269,7 +273,19 @@ export default function BillsToPay() {
                 className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
               />
             </div>
-            <div className="md:col-span-2">
+            <div className="md:col-span-2 flex flex-col gap-2">
+              <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Custo fixo</label>
+              <label className="flex items-center gap-2 cursor-pointer mt-2">
+                <input
+                  type="checkbox"
+                  checked={isFixedCost}
+                  onChange={(e) => setIsFixedCost(e.target.checked)}
+                  className="rounded border-slate-300 text-slate-900 focus:ring-slate-500"
+                />
+                <span className="text-sm font-semibold text-slate-700">Conta é custo fixo</span>
+              </label>
+            </div>
+            <div className="md:col-span-1">
               <button
                 type="submit"
                 className="w-full rounded-xl px-4 py-2 text-sm font-extrabold shadow-sm transition bg-slate-900 text-white hover:bg-slate-800"
@@ -319,6 +335,7 @@ export default function BillsToPay() {
                       <th className="px-4 py-3">Venc.</th>
                       <th className="px-4 py-3">Pago</th>
                       <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3">Fix.</th>
                       <th className="px-4 py-3"></th>
                     </tr>
                   </thead>
@@ -351,6 +368,13 @@ export default function BillsToPay() {
                               {b.status === "paid" ? "Pago" : b.status === "partial" ? "Parcial" : "Pendente"}
                             </span>
                           </td>
+                          <td className="px-4 py-3">
+                            {b.isFixedCost === true ? (
+                              <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-800" title="Custo fixo">Sim</span>
+                            ) : (
+                              <span className="text-slate-400 text-xs">—</span>
+                            )}
+                          </td>
                           <td className="px-4 py-3 text-right" onClick={(ev) => ev.stopPropagation()}>
                             <button
                               onClick={() => deleteBill(b.id)}
@@ -364,7 +388,7 @@ export default function BillsToPay() {
                     })}
                     {bills.length === 0 && !loading && (
                       <tr>
-                        <td className="px-4 py-6 text-slate-500" colSpan={7}>
+                        <td className="px-4 py-6 text-slate-500" colSpan={8}>
                           Nenhuma conta cadastrada.
                         </td>
                       </tr>
