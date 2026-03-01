@@ -4,6 +4,13 @@ const API_URL = "http://localhost:4000";
 
 type InventoryConfig = { stockStartDate: string | null };
 type ProductStockRow = { productId: number; product: { id: number; code: string; name: string }; quantity: number };
+type VariationSold = {
+  productId: number;
+  name: string;
+  variationName: string | null;
+  source: string;
+  sold: number;
+};
 type StockCurrentItem = {
   type?: "product" | "group";
   productId: number | null;
@@ -15,6 +22,7 @@ type StockCurrentItem = {
   current: number;
   costPrice: number | null;
   productNames?: string[];
+  variations?: VariationSold[];
 };
 type StockCurrent = { stockStartDate: string | null; items: StockCurrentItem[] };
 type StockProjection = {
@@ -61,6 +69,7 @@ export default function Stock() {
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupProductIds, setNewGroupProductIds] = useState<number[]>([]);
   const [showNewGroup, setShowNewGroup] = useState(false);
+  const [expandedStockGroups, setExpandedStockGroups] = useState<Set<number>>(new Set());
 
   async function fetchConfig() {
     try {
@@ -348,32 +357,85 @@ export default function Stock() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {stockCurrent.items.map((item) => (
-                    <tr key={item.type === "group" ? `g-${item.productGroupId}` : `p-${item.productId}`} className="hover:bg-slate-50">
-                      <td className="px-4 py-3">
-                        <div className="font-semibold text-slate-900">{item.name}</div>
-                        {item.type === "group" && item.productNames && item.productNames.length > 0 ? (
-                          <div className="text-xs text-slate-500 mt-0.5">
-                            Consolidado: {item.productNames.join(" · ")}
-                          </div>
-                        ) : (
-                          item.code && <div className="text-xs text-slate-500">{item.code}</div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 font-bold text-slate-900">{item.opening}</td>
-                      <td className="px-4 py-3 text-slate-700">{item.sold}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={cn(
-                            "font-extrabold",
-                            item.current <= 0 ? "text-red-600" : "text-emerald-700"
-                          )}
+                  {stockCurrent.items.map((item) => {
+                    const key = item.type === "group" ? `g-${item.productGroupId}` : `p-${item.productId}`;
+                    const hasVariations = item.type === "group" && item.variations && item.variations.length > 1;
+                    const isExpanded = hasVariations && item.productGroupId != null && expandedStockGroups.has(item.productGroupId);
+
+                    return (
+                      <React.Fragment key={key}>
+                        <tr
+                          className={cn("hover:bg-slate-50", hasVariations && "cursor-pointer")}
+                          onClick={() => {
+                            if (!hasVariations || item.productGroupId == null) return;
+                            setExpandedStockGroups((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(item.productGroupId!)) next.delete(item.productGroupId!);
+                              else next.add(item.productGroupId!);
+                              return next;
+                            });
+                          }}
                         >
-                          {item.current}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              {hasVariations && (
+                                <span className="text-violet-500 text-xs font-bold flex-shrink-0">
+                                  {isExpanded ? "▼" : "▶"}
+                                </span>
+                              )}
+                              <div>
+                                <div className="font-semibold text-slate-900">{item.name}</div>
+                                {item.type === "group" && item.productNames && item.productNames.length > 0 ? (
+                                  <div className="text-xs text-slate-500 mt-0.5">
+                                    {hasVariations ? (
+                                      <span className="text-violet-600 font-semibold">{item.variations!.length} variações • clique para expandir</span>
+                                    ) : (
+                                      <>Consolidado: {item.productNames.join(" · ")}</>
+                                    )}
+                                  </div>
+                                ) : (
+                                  item.code && <div className="text-xs text-slate-500">{item.code}</div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 font-bold text-slate-900">{item.opening}</td>
+                          <td className="px-4 py-3 text-slate-700">{item.sold}</td>
+                          <td className="px-4 py-3">
+                            <span className={cn("font-extrabold", item.current <= 0 ? "text-red-600" : "text-emerald-700")}>
+                              {item.current}
+                            </span>
+                          </td>
+                        </tr>
+                        {isExpanded && item.variations!.map((v) => (
+                          <tr key={`${key}-v-${v.productId}`} className="bg-violet-50/30">
+                            <td className="px-4 py-2 pl-10">
+                              <div className="flex items-center gap-2">
+                                <span className="w-1.5 h-1.5 rounded-full bg-violet-400 flex-shrink-0" />
+                                <span className="text-xs text-slate-700 font-medium">{v.name}</span>
+                                {v.variationName && (
+                                  <span className="text-[10px] bg-violet-100 text-violet-700 border border-violet-200 rounded px-1.5 py-0.5 font-semibold">
+                                    {v.variationName}
+                                  </span>
+                                )}
+                                {v.source && (
+                                  <span className={cn(
+                                    "text-[10px] rounded px-1.5 py-0.5 font-bold text-white",
+                                    v.source === "shopee" ? "bg-orange-500" : v.source === "tiktok" ? "bg-slate-700" : "bg-indigo-600"
+                                  )}>
+                                    {v.source}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-2 text-xs text-slate-400">—</td>
+                            <td className="px-4 py-2 text-xs font-bold text-slate-700">{v.sold}</td>
+                            <td className="px-4 py-2 text-xs text-slate-400">—</td>
+                          </tr>
+                        ))}
+                      </React.Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

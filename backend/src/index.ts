@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import util from 'util';
 import { createRequire } from 'module';
+import * as shopeeApi from './shopeeApi.js';
 
 type FormFields = Record<string, unknown>;
 type FormFiles = Record<string, unknown>;
@@ -129,8 +130,11 @@ interface StandardizedShopeeItem {
   status: string;
   commissionFee: number | null;
   serviceFee: number | null;
-  productCode: string;      // para OrderItem e Product: canal_idUnico (ex: shopee_1734118760415856191)
+  productCode: string;
   name: string;
+  baseName: string;         // nome do produto sem variação
+  variationName: string;    // nome da variação (ex: "Preto M")
+  skuId: string;            // SKU ID original (pode ser usado como SKU universal)
   unitPrice: number;
   quantity: number;
   totalPrice: number;
@@ -143,8 +147,8 @@ function standardizeShopeeRow(row: Record<string, unknown>): StandardizedShopeeI
     const orderDateVal = pick(row, ['Data de criação do pedido', 'Data de Criação do Pedido', 'Created Time']);
     const statusVal = pick(row, ['Status do pedido', 'Status', 'Order Status']);
     const productNameVal = pick(row, ['Nome do Produto', 'Nome do produto', 'Product Name']);
-    const variationVal = pick(row, ['Variation', 'Variação', 'Variacao']);
-    const skuIdVal = pick(row, ['SKU ID', 'ID do SKU']);
+    const variationVal = pick(row, ['Nome da variação', 'Nome da Variação', 'Nome da variacao', 'Variation', 'Variação', 'Variacao', 'Variation Name']);
+    const skuIdVal = pick(row, ['Número de referência SKU', 'Numero de referencia SKU', 'Nº de referência do SKU principal', 'SKU ID', 'ID do SKU', 'SKU Reference No.']);
     const qtyVal = pick(row, ['Quantidade', 'Qty', 'Quantity']);
     const priceVal = pick(row, ['SKU Subtotal After Discount', 'Subtotal do produto', 'Valor Total', 'Total global', 'Preço Final Total']);
     const unitPriceVal = pick(row, ['SKU Unit Original Price', 'Preço unitário', 'Preco unitario', 'Unit Price', 'Preço']);
@@ -162,7 +166,9 @@ function standardizeShopeeRow(row: Record<string, unknown>): StandardizedShopeeI
     const name = variation ? `${productName} - ${variation}` : productName;
     const skuId = skuIdVal ? String(skuIdVal).trim() : '';
     const slug = slugifyProductKey(productName, variation);
-    const productCode = skuId || hashToUniqueId(slug);
+    const productCode = skuId
+      ? (variation ? `${skuId}_${slugifyProductKey('', variation)}` : skuId)
+      : hashToUniqueId(slug);
     const quantity = qtyVal ? parseInt(String(qtyVal), 10) || 0 : 0;
     const totalPrice = parseBrNumber(priceVal);
     const unitPrice = unitPriceVal != null ? parseBrNumber(unitPriceVal) : (quantity > 0 ? totalPrice / quantity : 0);
@@ -184,6 +190,9 @@ function standardizeShopeeRow(row: Record<string, unknown>): StandardizedShopeeI
       serviceFee,
       productCode,
       name,
+      baseName: productName,
+      variationName: variation,
+      skuId: skuId,
       unitPrice,
       quantity,
       totalPrice,
@@ -447,14 +456,74 @@ function hashToUniqueId(s: string): string {
   return String(Math.abs(h));
 }
 
-async function ensureProduct(prisma: any, source: string, productCode: string, name: string): Promise<number> {
+interface EnsureProductOpts {
+  sku?: string | null;
+  variationName?: string | null;
+  parentCode?: string | null;
+}
+
+async function ensureProduct(
+  prisma: any,
+  source: string,
+  productCode: string,
+  name: string,
+  opts?: EnsureProductOpts,
+): Promise<number> {
   const code = `${source}_${String(productCode).trim()}`;
+  const extra: Record<string, unknown> = {};
+  if (opts?.variationName) extra.variationName = opts.variationName;
+  if (opts?.parentCode) extra.parentCode = opts.parentCode;
+  if (opts?.sku) extra.sku = opts.sku;
+
   const p = await prisma.product.upsert({
     where: { code },
-    update: { name }, // atualiza nome em re-import (ex.: após remover "Imediata")
-    create: { code, name, source },
+    update: { name, ...extra },
+    create: { code, name, source, ...extra },
   });
   return p.id;
+}
+
+/** Auto-create a ProductGroup for variations that share the same parentCode */
+async function autoGroupVariations(prisma: any, parentCode: string, groupName: string) {
+  const products = await prisma.product.findMany({
+    where: { parentCode },
+    include: { productGroupItem: true },
+  });
+
+  const ungrouped = products.filter((p: any) => !p.productGroupItem);
+  if (ungrouped.length < 2) return;
+
+  // Build a descriptive group name that includes variation names
+  const variations = products
+    .map((p: any) => p.variationName)
+    .filter(Boolean)
+    .sort();
+  const fullGroupName = variations.length > 0
+    ? `${groupName} (${variations.join(', ')})`
+    : groupName;
+
+  const alreadyGrouped = products.find((p: any) => p.productGroupItem);
+  let groupId: number;
+
+  if (alreadyGrouped) {
+    groupId = alreadyGrouped.productGroupItem.productGroupId;
+    // Update group name to reflect current variations
+    await prisma.productGroup.update({
+      where: { id: groupId },
+      data: { name: fullGroupName },
+    });
+  } else {
+    const group = await prisma.productGroup.create({ data: { name: fullGroupName } });
+    groupId = group.id;
+  }
+
+  for (const p of ungrouped) {
+    await prisma.productGroupItem.upsert({
+      where: { productId: p.id },
+      update: { productGroupId: groupId },
+      create: { productGroupId: groupId, productId: p.id },
+    });
+  }
 }
 
 async function main() {
@@ -565,12 +634,23 @@ async function main() {
             );
           }
           const productIds = new Map<string, number>();
+          const parentNames = new Map<string, string>(); // parentCode → baseName
           for (const r of rows) {
             const key = `shopee_${r.productCode}`;
             if (!productIds.has(key)) {
-              const id = await ensureProduct(prisma, 'shopee', r.productCode, r.name);
+              const parentCode = r.variationName ? `shopee_base_${slugifyProductKey(r.baseName, '')}` : undefined;
+              const id = await ensureProduct(prisma, 'shopee', r.productCode, r.name, {
+                variationName: r.variationName || null,
+                parentCode: parentCode || null,
+                sku: r.skuId || null,
+              });
               productIds.set(key, id);
+              if (parentCode && r.baseName) parentNames.set(parentCode, r.baseName);
             }
+          }
+          // Auto-group variations by parent product
+          for (const [parentCode, baseName] of parentNames.entries()) {
+            await autoGroupVariations(prisma, parentCode, baseName);
           }
           for (const r of rows) {
             const productId = productIds.get(`shopee_${r.productCode}`);
@@ -1336,11 +1416,21 @@ async function main() {
         });
         for (const gs of groupStockRows) {
           const group = gs.productGroup;
-          const productIds = (group?.items ?? []).map((i: any) => i.productId);
+          const groupItems = group?.items ?? [];
+          const productIds = groupItems.map((i: any) => i.productId);
           const sold = productIds.reduce((sum: number, pid: number) => sum + (soldByProduct.get(pid) || 0), 0);
           const opening = gs.quantity || 0;
           const current = Math.max(0, opening - sold);
-          const firstProduct = group?.items?.[0]?.product;
+          const firstProduct = groupItems[0]?.product;
+
+          const variations = groupItems.map((gi: any) => ({
+            productId: gi.productId,
+            name: gi.product?.name ?? '',
+            variationName: gi.product?.variationName ?? null,
+            source: gi.product?.source ?? '',
+            sold: soldByProduct.get(gi.productId) || 0,
+          }));
+
           result.push({
             type: 'group',
             productGroupId: gs.productGroupId,
@@ -1351,7 +1441,8 @@ async function main() {
             sold,
             current,
             costPrice: firstProduct?.costPrice ?? null,
-            productNames: (group?.items ?? []).map((i: any) => i.product?.name).filter(Boolean),
+            productNames: groupItems.map((i: any) => i.product?.name).filter(Boolean),
+            variations,
           });
         }
       }
@@ -2006,21 +2097,17 @@ app.get('/api/dashboard', async (_req, res) => {
 
     // Estruturas de dados
     const salesByChannel: Record<string, number> = {};
-    const ordersByChannel: Record<string, number> = {}; // Contagem de pedidos
+    const ordersByChannel: Record<string, number> = {};
     const salesByMonth: Record<string, any> = {};
-    const productRanking: Record<string, { quantity: number, total: number }> = {};
 
     sales.forEach(sale => {
       const monthYear = new Date(sale.orderDate).toLocaleDateString('pt-BR', { month: '2-digit', year: '2-digit' });
       const amount = sale.totalPrice;
       const source = sale.source;
-      const product = sale.productName;
 
-      // A. Por Canal (Receita e Volume)
       salesByChannel[source] = (salesByChannel[source] || 0) + amount;
       ordersByChannel[source] = (ordersByChannel[source] || 0) + 1;
 
-      // B. Por Mês (Acumulando Receita e Contagem)
       if (!salesByMonth[monthYear]) {
         salesByMonth[monthYear] = { 
           name: monthYear, 
@@ -2028,7 +2115,6 @@ app.get('/api/dashboard', async (_req, res) => {
           shopeeCount: 0, tiktokCount: 0, trayCount: 0, totalCount: 0 
         };
       }
-      
       if (source === 'shopee') {
         salesByMonth[monthYear].shopee += amount;
         salesByMonth[monthYear].shopeeCount += 1;
@@ -2043,26 +2129,45 @@ app.get('/api/dashboard', async (_req, res) => {
       }
       salesByMonth[monthYear].total += amount;
       salesByMonth[monthYear].totalCount += 1;
-
-      // C. Ranking de Produtos
-      if (!productRanking[product]) {
-        productRanking[product] = { quantity: 0, total: 0 };
-      }
-      productRanking[product].quantity += sale.quantity;
-      productRanking[product].total += amount;
     });
 
-    // 3. Formatar
     const chartChannel = Object.keys(salesByChannel).map(key => ({
       name: key.charAt(0).toUpperCase() + key.slice(1),
       value: Number(salesByChannel[key].toFixed(2))
     }));
+    const chartMonthly = Object.values(salesByMonth);
 
-    const chartMonthly = Object.values(salesByMonth); // Já é um array de objetos
+    // Top products using OrderItem + Product (individual product/variation level)
+    const orderItems = await prisma.orderItem.findMany({
+      where: {
+        order: {
+          NOT: [
+            { status: { contains: 'Cancelado' } },
+            { status: { contains: 'Não pago' } },
+          ],
+        },
+      },
+      include: { product: true },
+    });
 
-    // Top 5 Produtos por Faturamento
+    const productRanking: Record<string, { quantity: number; total: number; sources: Set<string> }> = {};
+    for (const item of orderItems) {
+      const key = item.product?.name || item.name;
+      if (!productRanking[key]) {
+        productRanking[key] = { quantity: 0, total: 0, sources: new Set() };
+      }
+      productRanking[key].quantity += item.quantity || 0;
+      productRanking[key].total += item.totalPrice || 0;
+      productRanking[key].sources.add(item.source);
+    }
+
     const topProducts = Object.entries(productRanking)
-      .map(([name, data]) => ({ name, ...data }))
+      .map(([name, data]) => ({
+        name,
+        quantity: data.quantity,
+        total: Number(data.total.toFixed(2)),
+        channels: Array.from(data.sources),
+      }))
       .sort((a, b) => b.total - a.total)
       .slice(0, 5);
 
@@ -2085,6 +2190,91 @@ app.get('/api/dashboard', async (_req, res) => {
     return res.status(500).json({ message: 'Erro ao gerar dashboard.' });
   }
 });
+
+  // Curva A – ranking completo de produtos por faturamento
+  app.get('/api/product-curve', async (req, res) => {
+    try {
+      const monthStr = String(req.query.month ?? '').trim();
+      let dateFilter: any = {};
+      if (monthStr) {
+        const [y, m] = monthStr.split('-').map(Number);
+        const start = new Date(y, m - 1, 1);
+        const end = new Date(y, m, 1);
+        dateFilter = { order: { orderDate: { gte: start, lt: end } } };
+      }
+
+      const items = await prisma.orderItem.findMany({
+        where: {
+          ...dateFilter,
+          order: {
+            ...(dateFilter.order || {}),
+            NOT: [
+              { status: { contains: 'Cancelado' } },
+              { status: { contains: 'Não pago' } },
+            ],
+          },
+        },
+        include: {
+          product: {
+            include: { productGroupItem: { include: { productGroup: true } } },
+          },
+        },
+      });
+
+      // Consolidate by group when product belongs to a group; otherwise show individually
+      const ranking: Record<string, { displayName: string; quantity: number; total: number; sources: Set<string>; groupId: number | null; products: Set<string> }> = {};
+      for (const it of items) {
+        const group = it.product?.productGroupItem?.productGroup;
+        const productName = it.product?.name || it.name;
+        const key = group ? `__group_${group.id}` : productName;
+        if (!ranking[key]) {
+          ranking[key] = {
+            displayName: group ? group.name : productName,
+            quantity: 0, total: 0, sources: new Set(), groupId: group?.id ?? null, products: new Set(),
+          };
+        }
+        ranking[key].quantity += it.quantity || 0;
+        ranking[key].total += it.totalPrice || 0;
+        ranking[key].sources.add(it.source);
+        ranking[key].products.add(productName);
+      }
+
+      const sorted = Object.values(ranking)
+        .map(d => ({
+          name: d.displayName,
+          quantity: d.quantity,
+          total: Number(d.total.toFixed(2)),
+          channels: Array.from(d.sources),
+          groupId: d.groupId,
+          products: Array.from(d.products),
+        }))
+        .sort((a, b) => b.total - a.total);
+
+      const grandTotal = sorted.reduce((s, p) => s + p.total, 0);
+
+      let cumPct = 0;
+      const rows = sorted.map((p, idx) => {
+        const pct = grandTotal > 0 ? (p.total / grandTotal) * 100 : 0;
+        cumPct += pct;
+        let curve: 'A' | 'B' | 'C' = 'C';
+        if (cumPct <= 80) curve = 'A';
+        else if (cumPct <= 95) curve = 'B';
+        return { ...p, pct: Number(pct.toFixed(2)), cumPct: Number(cumPct.toFixed(2)), curve, rank: idx + 1 };
+      });
+
+      return res.json({
+        grandTotal: Number(grandTotal.toFixed(2)),
+        totalProducts: rows.length,
+        countA: rows.filter(r => r.curve === 'A').length,
+        countB: rows.filter(r => r.curve === 'B').length,
+        countC: rows.filter(r => r.curve === 'C').length,
+        rows,
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao gerar curva A.' });
+    }
+  });
 
   // Vendas por dia por canal: GET /api/sales-by-day?month=2026-02
   app.get('/api/sales-by-day', async (req, res) => {
@@ -2146,6 +2336,566 @@ app.get('/api/dashboard', async (_req, res) => {
     } catch (e) {
       console.error(e);
       return res.status(500).json({ message: 'Erro ao buscar vendas por dia.' });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHOPEE OPEN PLATFORM INTEGRATION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Get integration status
+  app.get('/api/shopee/status', async (_req, res) => {
+    try {
+      const integration = await prisma.shopeeIntegration.findFirst({ orderBy: { id: 'desc' } });
+      if (!integration) return res.json({ configured: false, status: 'disconnected' });
+
+      const now = new Date();
+      let status = integration.status;
+      if (status === 'connected' && integration.tokenExpiresAt && integration.tokenExpiresAt < now) {
+        status = integration.refreshExpiresAt && integration.refreshExpiresAt > now ? 'token_expired' : 'expired';
+      }
+
+      return res.json({
+        configured: true,
+        status,
+        shopId: integration.shopId,
+        shopName: integration.shopName,
+        partnerId: integration.partnerId,
+        lastSyncAt: integration.lastSyncAt,
+        tokenExpiresAt: integration.tokenExpiresAt,
+        refreshExpiresAt: integration.refreshExpiresAt,
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar status da integração.' });
+    }
+  });
+
+  // Save partner credentials
+  app.post('/api/shopee/config', express.json(), async (req, res) => {
+    try {
+      const { partnerId, partnerKey } = req.body;
+      if (!partnerId || !partnerKey) {
+        return res.status(400).json({ message: 'Partner ID e Partner Key são obrigatórios.' });
+      }
+
+      const existing = await prisma.shopeeIntegration.findFirst({ orderBy: { id: 'desc' } });
+      if (existing) {
+        await prisma.shopeeIntegration.update({
+          where: { id: existing.id },
+          data: { partnerId: String(partnerId), partnerKey: String(partnerKey) },
+        });
+      } else {
+        await prisma.shopeeIntegration.create({
+          data: { partnerId: String(partnerId), partnerKey: String(partnerKey) },
+        });
+      }
+
+      return res.json({ success: true });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao salvar configuração.' });
+    }
+  });
+
+  // Generate OAuth authorization URL
+  app.get('/api/shopee/auth-url', async (req, res) => {
+    try {
+      const integration = await prisma.shopeeIntegration.findFirst({ orderBy: { id: 'desc' } });
+      if (!integration) return res.status(400).json({ message: 'Configure Partner ID e Partner Key primeiro.' });
+
+      const redirectUrl = `${req.protocol}://${req.get('host')}/api/shopee/callback`;
+      const url = shopeeApi.buildAuthUrl(
+        Number(integration.partnerId),
+        integration.partnerKey,
+        redirectUrl,
+      );
+
+      return res.json({ url, redirectUrl });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao gerar URL de autorização.' });
+    }
+  });
+
+  // OAuth callback from Shopee
+  app.get('/api/shopee/callback', async (req, res) => {
+    try {
+      const code = String(req.query.code ?? '');
+      const shopId = String(req.query.shop_id ?? '');
+
+      if (!code || !shopId) {
+        return res.status(400).send('Parâmetros code e shop_id são obrigatórios.');
+      }
+
+      const integration = await prisma.shopeeIntegration.findFirst({ orderBy: { id: 'desc' } });
+      if (!integration) return res.status(400).send('Integração não configurada.');
+
+      const tokenRes = await shopeeApi.getAccessToken(
+        Number(integration.partnerId),
+        integration.partnerKey,
+        code,
+        Number(shopId),
+      );
+
+      if (tokenRes.error) {
+        console.error('Shopee token error:', tokenRes);
+        return res.status(400).send(`Erro ao obter token: ${tokenRes.error} - ${tokenRes.message}`);
+      }
+
+      const now = new Date();
+      const tokenExpires = new Date(now.getTime() + (tokenRes.expire_in ?? 14400) * 1000);
+      const refreshExpires = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+      let shopName = '';
+      try {
+        const info = await shopeeApi.getShopInfo(
+          Number(integration.partnerId),
+          integration.partnerKey,
+          tokenRes.access_token,
+          Number(shopId),
+        );
+        shopName = info.shop_name || '';
+      } catch { /* optional */ }
+
+      await prisma.shopeeIntegration.update({
+        where: { id: integration.id },
+        data: {
+          shopId,
+          shopName,
+          accessToken: tokenRes.access_token,
+          refreshToken: tokenRes.refresh_token,
+          tokenExpiresAt: tokenExpires,
+          refreshExpiresAt: refreshExpires,
+          status: 'connected',
+        },
+      });
+
+      // Redirect to frontend with success
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      return res.redirect(`${frontendUrl}?shopee_connected=1`);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).send('Erro interno ao processar callback.');
+    }
+  });
+
+  // Refresh token manually
+  app.post('/api/shopee/refresh-token', async (_req, res) => {
+    try {
+      const integration = await prisma.shopeeIntegration.findFirst({ orderBy: { id: 'desc' } });
+      if (!integration?.refreshToken || !integration?.shopId) {
+        return res.status(400).json({ message: 'Integração não conectada.' });
+      }
+
+      const tokenRes = await shopeeApi.refreshAccessToken(
+        Number(integration.partnerId),
+        integration.partnerKey,
+        integration.refreshToken,
+        Number(integration.shopId),
+      );
+
+      if (tokenRes.error) {
+        await prisma.shopeeIntegration.update({
+          where: { id: integration.id },
+          data: { status: 'expired' },
+        });
+        return res.status(400).json({ message: `Erro Shopee: ${tokenRes.error} - ${tokenRes.message}` });
+      }
+
+      const now = new Date();
+      await prisma.shopeeIntegration.update({
+        where: { id: integration.id },
+        data: {
+          accessToken: tokenRes.access_token,
+          refreshToken: tokenRes.refresh_token,
+          tokenExpiresAt: new Date(now.getTime() + (tokenRes.expire_in ?? 14400) * 1000),
+          refreshExpiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+          status: 'connected',
+        },
+      });
+
+      return res.json({ success: true });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao renovar token.' });
+    }
+  });
+
+  // Helper: ensure valid access token (auto-refresh if needed)
+  async function ensureValidToken() {
+    const integration = await prisma.shopeeIntegration.findFirst({ orderBy: { id: 'desc' } });
+    if (!integration?.accessToken || !integration?.shopId) throw new Error('Integração não conectada.');
+
+    const now = new Date();
+    if (integration.tokenExpiresAt && integration.tokenExpiresAt > now) return integration;
+
+    if (!integration.refreshToken || (integration.refreshExpiresAt && integration.refreshExpiresAt < now)) {
+      await prisma.shopeeIntegration.update({ where: { id: integration.id }, data: { status: 'expired' } });
+      throw new Error('Refresh token expirado. Reconecte a loja.');
+    }
+
+    const tokenRes = await shopeeApi.refreshAccessToken(
+      Number(integration.partnerId),
+      integration.partnerKey,
+      integration.refreshToken,
+      Number(integration.shopId),
+    );
+
+    if (tokenRes.error) {
+      await prisma.shopeeIntegration.update({ where: { id: integration.id }, data: { status: 'expired' } });
+      throw new Error(`Erro ao renovar token: ${tokenRes.error}`);
+    }
+
+    const updated = await prisma.shopeeIntegration.update({
+      where: { id: integration.id },
+      data: {
+        accessToken: tokenRes.access_token,
+        refreshToken: tokenRes.refresh_token,
+        tokenExpiresAt: new Date(now.getTime() + (tokenRes.expire_in ?? 14400) * 1000),
+        refreshExpiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+        status: 'connected',
+      },
+    });
+
+    return updated;
+  }
+
+  // Sync orders from Shopee
+  app.post('/api/shopee/sync', express.json(), async (req, res) => {
+    try {
+      const integration = await ensureValidToken();
+      const partnerId = Number(integration.partnerId);
+      const shopId = Number(integration.shopId);
+
+      // Default: sync last 30 days (or custom date range)
+      const daysBack = Number(req.body.daysBack) || 30;
+      const now = Math.floor(Date.now() / 1000);
+      const timeFrom = req.body.timeFrom ? Number(req.body.timeFrom) : now - daysBack * 24 * 60 * 60;
+      const timeTo = req.body.timeTo ? Number(req.body.timeTo) : now;
+
+      // 1. Fetch all order SNs
+      const orderSns = await shopeeApi.fetchAllOrderSns(
+        partnerId, integration.partnerKey, integration.accessToken!, shopId,
+        timeFrom, timeTo,
+      );
+
+      if (orderSns.length === 0) {
+        await prisma.shopeeIntegration.update({
+          where: { id: integration.id },
+          data: { lastSyncAt: new Date() },
+        });
+        return res.json({ success: true, synced: 0, total: 0, message: 'Nenhum pedido encontrado no período.' });
+      }
+
+      // 2. Fetch order details
+      const orders = await shopeeApi.fetchOrderDetails(
+        partnerId, integration.partnerKey, integration.accessToken!, shopId, orderSns,
+      );
+
+      // 3. Upsert into database
+      let synced = 0;
+      for (const order of orders) {
+        const orderId = order.order_sn;
+        const orderDate = new Date(order.create_time * 1000);
+        const statusMap: Record<string, string> = {
+          UNPAID: 'Não pago',
+          READY_TO_SHIP: 'Pronto para envio',
+          PROCESSED: 'Processado',
+          SHIPPED: 'Enviado',
+          COMPLETED: 'Concluído',
+          IN_CANCEL: 'Em cancelamento',
+          CANCELLED: 'Cancelado',
+          INVOICE_PENDING: 'Nota pendente',
+        };
+        const status = statusMap[order.order_status] || order.order_status;
+        const totalPrice = order.total_amount || 0;
+        const items = order.item_list || [];
+        const productName = items.length > 0
+          ? items.map((i) => i.item_name).join(' + ')
+          : 'Produto Shopee';
+        const quantity = items.reduce((sum, i) => sum + (i.model_quantity_purchased || 1), 0);
+
+        await prisma.order.upsert({
+          where: { orderId_source: { orderId, source: 'shopee' } },
+          update: {
+            orderDate,
+            productName,
+            quantity,
+            totalPrice,
+            status,
+          },
+          create: {
+            orderId,
+            orderDate,
+            productName,
+            quantity,
+            totalPrice,
+            source: 'shopee',
+            status,
+          },
+        });
+
+        // Upsert items with variation support
+        const parentItemIds = new Set<string>();
+        for (const item of items) {
+          const hasVariation = !!item.model_id && !!item.model_name;
+          const productCode = `shopee_${item.item_id}${item.model_id ? '_' + item.model_id : ''}`;
+          const itemName = hasVariation
+            ? `${item.item_name} - ${item.model_name}`
+            : item.item_name;
+          const variationName = hasVariation ? item.model_name : null;
+          const parentCode = hasVariation ? `shopee_item_${item.item_id}` : null;
+          const unitPrice = item.model_discounted_price || item.model_original_price || 0;
+          const qty = item.model_quantity_purchased || 1;
+          const itemSku = item.model_sku || item.item_sku || null;
+
+          await prisma.product.upsert({
+            where: { code: productCode },
+            update: {
+              name: itemName,
+              source: 'shopee',
+              variationName,
+              parentCode,
+              sku: itemSku,
+            },
+            create: {
+              code: productCode,
+              name: itemName,
+              source: 'shopee',
+              variationName,
+              parentCode,
+              sku: itemSku,
+            },
+          });
+
+          const product = await prisma.product.findUnique({ where: { code: productCode } });
+
+          await prisma.orderItem.upsert({
+            where: { orderId_source_productCode: { orderId, source: 'shopee', productCode } },
+            update: {
+              name: itemName,
+              unitPrice,
+              quantity: qty,
+              totalPrice: unitPrice * qty,
+              productId: product?.id ?? null,
+            },
+            create: {
+              orderId,
+              source: 'shopee',
+              productCode,
+              name: itemName,
+              unitPrice,
+              quantity: qty,
+              totalPrice: unitPrice * qty,
+              productId: product?.id ?? null,
+            },
+          });
+
+          if (parentCode) parentItemIds.add(`${parentCode}|${item.item_name}`);
+        }
+
+        // Auto-group Shopee variations
+        for (const entry of parentItemIds) {
+          const [parentCode, baseName] = entry.split('|');
+          await autoGroupVariations(prisma, parentCode, baseName);
+        }
+
+        synced++;
+      }
+
+      await prisma.shopeeIntegration.update({
+        where: { id: integration.id },
+        data: { lastSyncAt: new Date() },
+      });
+
+      return res.json({ success: true, synced, total: orderSns.length });
+    } catch (e: any) {
+      console.error('Shopee sync error:', e);
+      return res.status(500).json({ message: e.message || 'Erro ao sincronizar pedidos.' });
+    }
+  });
+
+  // Disconnect Shopee integration
+  app.post('/api/shopee/disconnect', async (_req, res) => {
+    try {
+      const integration = await prisma.shopeeIntegration.findFirst({ orderBy: { id: 'desc' } });
+      if (integration) {
+        await prisma.shopeeIntegration.update({
+          where: { id: integration.id },
+          data: {
+            accessToken: null,
+            refreshToken: null,
+            tokenExpiresAt: null,
+            refreshExpiresAt: null,
+            shopId: null,
+            shopName: null,
+            status: 'disconnected',
+          },
+        });
+      }
+      return res.json({ success: true });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao desconectar.' });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRODUCT CONSOLIDATION (cross-channel)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // List products grouped by channel with variation info
+  app.get('/api/products/by-channel', async (_req, res) => {
+    try {
+      const products = await prisma.product.findMany({
+        orderBy: [{ source: 'asc' }, { name: 'asc' }],
+        include: {
+          _count: { select: { orderItems: true } },
+          productGroupItem: { include: { productGroup: true } },
+          orderItems: { select: { quantity: true } },
+        },
+      });
+
+      const result = products.map((p) => {
+        const totalQtySold = (p.orderItems ?? []).reduce((sum, oi) => sum + (oi.quantity || 0), 0);
+        const { orderItems: _oi, ...rest } = p;
+        return { ...rest, totalQtySold };
+      });
+
+      return res.json(result);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar produtos.' });
+    }
+  });
+
+  // Update product SKU
+  app.patch('/api/products/:id/sku', express.json(), async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { sku } = req.body;
+      const updated = await prisma.product.update({
+        where: { id },
+        data: { sku: sku || null },
+      });
+      return res.json(updated);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao atualizar SKU.' });
+    }
+  });
+
+  // Suggest matches across channels using name similarity
+  app.get('/api/products/suggest-matches', async (_req, res) => {
+    try {
+      const products = await prisma.product.findMany({
+        select: { id: true, code: true, name: true, source: true, sku: true, variationName: true, parentCode: true },
+        orderBy: { name: 'asc' },
+      });
+
+      // Group products by normalized base name (without variation)
+      function normalizeForMatch(name: string): string {
+        return name
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/\s*-\s*[^-]*$/, '') // remove last segment after ' - ' (likely variation)
+          .replace(/[^a-z0-9]/g, '')
+          .trim();
+      }
+
+      const byNormalized = new Map<string, typeof products>();
+      for (const p of products) {
+        const baseName = p.variationName ? p.name.replace(` - ${p.variationName}`, '') : p.name;
+        const key = normalizeForMatch(baseName);
+        if (!key) continue;
+        if (!byNormalized.has(key)) byNormalized.set(key, []);
+        byNormalized.get(key)!.push(p);
+      }
+
+      // Only return groups that span multiple channels
+      const suggestions: Array<{ matchKey: string; products: typeof products }> = [];
+      for (const [key, group] of byNormalized.entries()) {
+        const channels = new Set(group.map((p) => p.source));
+        if (channels.size >= 2) {
+          suggestions.push({ matchKey: key, products: group });
+        }
+      }
+
+      return res.json(suggestions);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar sugestões.' });
+    }
+  });
+
+  // Link products into a ProductGroup (consolidation)
+  app.post('/api/products/consolidate', express.json(), async (req, res) => {
+    try {
+      const { productIds, groupName, groupId } = req.body as {
+        productIds: number[];
+        groupName?: string;
+        groupId?: number;
+      };
+
+      if (!productIds || productIds.length < 2) {
+        return res.status(400).json({ message: 'Selecione pelo menos 2 produtos.' });
+      }
+
+      let targetGroupId: number;
+
+      if (groupId) {
+        targetGroupId = groupId;
+      } else {
+        const group = await prisma.productGroup.create({
+          data: { name: groupName || 'Grupo consolidado' },
+        });
+        targetGroupId = group.id;
+      }
+
+      for (const pid of productIds) {
+        await prisma.productGroupItem.upsert({
+          where: { productId: pid },
+          update: { productGroupId: targetGroupId },
+          create: { productGroupId: targetGroupId, productId: pid },
+        });
+      }
+
+      // If any product in the group has a SKU, propagate it to others that don't have one
+      const groupProducts = await prisma.product.findMany({
+        where: { id: { in: productIds } },
+      });
+      const skuSource = groupProducts.find((p: any) => p.sku);
+      if (skuSource) {
+        for (const p of groupProducts) {
+          if (!p.sku) {
+            await prisma.product.update({ where: { id: p.id }, data: { sku: skuSource.sku } });
+          }
+        }
+      }
+
+      const group = await prisma.productGroup.findUnique({
+        where: { id: targetGroupId },
+        include: { items: { include: { product: true } } },
+      });
+
+      return res.json(group);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao consolidar produtos.' });
+    }
+  });
+
+  // Remove product from a group
+  app.delete('/api/products/:id/ungroup', async (req, res) => {
+    try {
+      const productId = Number(req.params.id);
+      await prisma.productGroupItem.deleteMany({ where: { productId } });
+      return res.json({ success: true });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao remover do grupo.' });
     }
   });
 

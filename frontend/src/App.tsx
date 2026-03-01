@@ -12,6 +12,8 @@ import BillsToPay from './BillsToPay';
 import SalesByDayDashboard from './SalesByDayDashboard';
 import BillsDashboard from './BillsDashboard';
 import Pricing from './Pricing';
+import ShopeeIntegration from './ShopeeIntegration';
+import ProductCurve from './ProductCurve';
 
 const API_URL = 'http://localhost:4000';
 
@@ -36,7 +38,7 @@ interface Sale {
 
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'bills_to_pay' | 'pricing'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'product_curve'>('upload');
 
   // --- LÓGICA DA TELA DE UPLOAD ---
   const [file, setFile] = useState<File | null>(null);
@@ -176,7 +178,11 @@ function App() {
                                     ? 'Cadastro contas'
                                     : currentView === 'pricing'
                                       ? 'Precificação'
-                                      : 'Simulação'}
+                                      : currentView === 'shopee_integration'
+                                        ? 'Integrações'
+                                        : currentView === 'product_curve'
+                                          ? 'Curva ABC'
+                                          : 'Simulação'}
               </h1>
               <p className="mt-1 text-white/80 text-sm">Shopee + TikTok + Tray • Importação e visualização</p>
             </div>
@@ -222,6 +228,15 @@ function App() {
                   )}
                 >
                   Custo ADS
+                </button>
+                <button
+                  onClick={() => setCurrentView('product_curve')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'product_curve' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Curva ABC
                 </button>
               </div>
               {/* Cadastros */}
@@ -301,6 +316,15 @@ function App() {
                 >
                   Simulação
                 </button>
+                <button
+                  onClick={() => setCurrentView('shopee_integration')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'shopee_integration' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Integrações
+                </button>
               </div>
             </div>
           </div>
@@ -330,6 +354,10 @@ function App() {
         <Pricing />
       ) : currentView === 'simulation' ? (
         <Simulation />
+      ) : currentView === 'shopee_integration' ? (
+        <ShopeeIntegration />
+      ) : currentView === 'product_curve' ? (
+        <ProductCurve />
       ) : (
         <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
           {/* Card: Upload */}

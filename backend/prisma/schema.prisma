@@ -50,17 +50,23 @@ model OrderItem {
 }
 
 model Product {
-  id        Int       @id @default(autoincrement())
-  code      String    @unique   // Código único (ex: "803", "tray_803", SKU)
-  name      String
-  costPrice Float?
-  source    String?   @default("")  // Opcional: "tray" | "shopee" | "tiktok" para saber origem
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id            Int       @id @default(autoincrement())
+  code          String    @unique   // Código único por canal (ex: "shopee_803", "tray_803")
+  name          String
+  sku           String?             // SKU universal para matching cross-channel
+  variationName String?             // Nome da variação (ex: "Preto M", "Azul G")
+  parentCode    String?             // Código do produto pai (para variações Shopee: item_id)
+  costPrice     Float?
+  source        String?   @default("")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   orderItems       OrderItem[]
   stock            ProductStock?
   productGroupItem ProductGroupItem?
+
+  @@index([sku])
+  @@index([parentCode])
 }
 
 model ProductGroup {
@@ -129,6 +135,22 @@ model PaymentTypeFee {
 
   @@unique([month, channel, paymentType])
   @@index([month, channel])
+}
+
+model ShopeeIntegration {
+  id               Int       @id @default(autoincrement())
+  partnerId        String
+  partnerKey       String
+  shopId           String?
+  shopName         String?
+  accessToken      String?
+  refreshToken     String?
+  tokenExpiresAt   DateTime?
+  refreshExpiresAt DateTime?
+  status           String    @default("disconnected") // disconnected | connected | expired
+  lastSyncAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 }
 
 model Bill {

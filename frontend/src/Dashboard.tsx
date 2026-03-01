@@ -32,6 +32,7 @@ interface ProductRank {
   name: string;
   quantity: number;
   total: number;
+  channels?: string[];
 }
 interface DashboardData {
   kpis: { revenue: number; orders: number; ticketMedio: number };
@@ -411,7 +412,7 @@ export default function DashboardBI() {
             </div>
           </Card>
 
-          <Card title="Top 5 Produtos (Curva A)" icon={Award} className="lg:col-span-5">
+          <Card title="Top 5 Produtos (consolidado)" icon={Award} className="lg:col-span-5">
             <div className="space-y-3">
               {data.topProducts.map((p, i) => {
                 const pct = data.kpis.revenue > 0 ? (p.total / data.kpis.revenue) * 100 : 0;
@@ -420,8 +421,14 @@ export default function DashboardBI() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="font-extrabold text-slate-900 line-clamp-2">{p.name}</div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          <span className="font-bold">{p.quantity}</span> un • {formatMoney(p.total)}
+                        <div className="mt-1 flex items-center gap-2 flex-wrap">
+                          <span className="text-xs text-slate-500"><span className="font-bold">{p.quantity}</span> un • {formatMoney(p.total)}</span>
+                          {p.channels?.map(ch => (
+                            <span key={ch} className={cn(
+                              "inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-extrabold text-white",
+                              ch === 'shopee' ? 'bg-orange-600' : ch === 'tiktok' ? 'bg-slate-800' : 'bg-sky-600'
+                            )}>{ch}</span>
+                          ))}
                         </div>
                       </div>
                       <div className="text-right shrink-0">

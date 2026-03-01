@@ -1,15 +1,16 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   ResponsiveContainer,
-  BarChart,
+  ComposedChart,
   Bar,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
 } from "recharts";
-import { BarChart3, Calendar, RefreshCcw } from "lucide-react";
+import { BarChart3, Calendar, RefreshCcw, GitCompareArrows } from "lucide-react";
 
 const API_URL = "http://localhost:4000";
 
@@ -26,11 +27,23 @@ type DayRow = {
   totalOrders: number;
 };
 
+type MergedRow = DayRow & {
+  day: number;
+  dayLabel: string;
+  prevTotal?: number;
+  prevShopee?: number;
+  prevTiktok?: number;
+  prevTray?: number;
+  prevTotalOrders?: number;
+};
+
 const CHANNEL_COLORS: Record<string, string> = {
   shopee: "#FF6B35",
   tiktok: "#1F2937",
   tray: "#0EA5E9",
 };
+
+const PREV_MONTH_COLOR = "#A855F7";
 
 const UI = {
   bg: "bg-slate-50",
@@ -52,23 +65,59 @@ function formatCompact(val: number) {
   return `${val.toFixed(0)}`;
 }
 
+function getPrevMonth(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  const prev = new Date(y, m - 2, 1);
+  return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getMonthLabel(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  const d = new Date(y, m - 1, 1);
+  return d.toLocaleDateString("pt-BR", { month: "short", year: "numeric" });
+}
+
+function formatDelta(current: number, previous: number): { text: string; color: string } {
+  if (previous === 0) return { text: "—", color: "text-slate-400" };
+  const pct = ((current - previous) / previous) * 100;
+  const sign = pct >= 0 ? "+" : "";
+  return {
+    text: `${sign}${pct.toFixed(1)}%`,
+    color: pct >= 0 ? "text-emerald-400" : "text-red-400",
+  };
+}
+
 export default function SalesByDayDashboard() {
   const [rows, setRows] = useState<DayRow[]>([]);
+  const [prevRows, setPrevRows] = useState<DayRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [compare, setCompare] = useState(false);
   const [month, setMonth] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   });
 
+  const prevMonth = useMemo(() => getPrevMonth(month), [month]);
+
   const fetchData = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/sales-by-day?month=${encodeURIComponent(month)}`);
+      const [res, prevRes] = await Promise.all([
+        fetch(`${API_URL}/api/sales-by-day?month=${encodeURIComponent(month)}`),
+        compare ? fetch(`${API_URL}/api/sales-by-day?month=${encodeURIComponent(prevMonth)}`) : Promise.resolve(null),
+      ]);
       const data = await res.json();
       setRows(Array.isArray(data) ? data : []);
+      if (prevRes) {
+        const prevData = await prevRes.json();
+        setPrevRows(Array.isArray(prevData) ? prevData : []);
+      } else {
+        setPrevRows([]);
+      }
     } catch (e) {
       console.error(e);
       setRows([]);
+      setPrevRows([]);
     } finally {
       setLoading(false);
     }
@@ -76,7 +125,30 @@ export default function SalesByDayDashboard() {
 
   useEffect(() => {
     fetchData();
-  }, [month]);
+  }, [month, compare]);
+
+  const mergedRows: MergedRow[] = useMemo(() => {
+    const prevByDay: Record<number, DayRow> = {};
+    for (const r of prevRows) {
+      const day = new Date(r.date + "T12:00:00").getDate();
+      prevByDay[day] = r;
+    }
+
+    return rows.map((r) => {
+      const day = new Date(r.date + "T12:00:00").getDate();
+      const prev = prevByDay[day];
+      return {
+        ...r,
+        day,
+        dayLabel: String(day),
+        prevTotal: prev?.total,
+        prevShopee: prev?.shopee,
+        prevTiktok: prev?.tiktok,
+        prevTray: prev?.tray,
+        prevTotalOrders: prev?.totalOrders,
+      };
+    });
+  }, [rows, prevRows]);
 
   const totals = rows.reduce(
     (acc, r) => ({
@@ -91,6 +163,62 @@ export default function SalesByDayDashboard() {
     }),
     { shopee: 0, tiktok: 0, tray: 0, total: 0, shopeeOrders: 0, tiktokOrders: 0, trayOrders: 0, totalOrders: 0 }
   );
+
+  const prevTotals = prevRows.reduce(
+    (acc, r) => ({
+      shopee: acc.shopee + r.shopee,
+      tiktok: acc.tiktok + r.tiktok,
+      tray: acc.tray + r.tray,
+      total: acc.total + r.total,
+      shopeeOrders: acc.shopeeOrders + (r.shopeeOrders ?? 0),
+      tiktokOrders: acc.tiktokOrders + (r.tiktokOrders ?? 0),
+      trayOrders: acc.trayOrders + (r.trayOrders ?? 0),
+      totalOrders: acc.totalOrders + (r.totalOrders ?? 0),
+    }),
+    { shopee: 0, tiktok: 0, tray: 0, total: 0, shopeeOrders: 0, tiktokOrders: 0, trayOrders: 0, totalOrders: 0 }
+  );
+
+  const chartData = compare ? mergedRows : rows;
+
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (!active || !payload || payload.length === 0) return null;
+    const row = payload[0]?.payload as MergedRow | undefined;
+
+    return (
+      <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-3 text-xs min-w-[180px]">
+        <div className="font-bold text-slate-900 mb-2">Dia {row?.day ?? label}</div>
+        {payload
+          .filter((p: any) => p.dataKey !== "prevTotal")
+          .map((p: any) => (
+            <div key={p.dataKey} className="flex justify-between gap-4 py-0.5">
+              <span style={{ color: p.color }}>{p.name}</span>
+              <span className="font-semibold text-slate-900">{formatMoney(Number(p.value || 0))}</span>
+            </div>
+          ))}
+        {compare && row?.prevTotal !== undefined && (
+          <>
+            <div className="border-t border-slate-100 mt-1.5 pt-1.5">
+              <div className="flex justify-between gap-4 py-0.5">
+                <span style={{ color: PREV_MONTH_COLOR }}>Mês anterior</span>
+                <span className="font-semibold text-slate-900">{formatMoney(row.prevTotal)}</span>
+              </div>
+              {row.prevTotalOrders !== undefined && (
+                <div className="text-slate-500 text-right">{row.prevTotalOrders} pedidos</div>
+              )}
+            </div>
+            <div className="border-t border-slate-100 mt-1.5 pt-1.5">
+              <div className="flex justify-between gap-4 py-0.5">
+                <span className="text-slate-600">Variação</span>
+                <span className={cn("font-bold", formatDelta(row.total, row.prevTotal).color)}>
+                  {formatDelta(row.total, row.prevTotal).text}
+                </span>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className={cn(UI.bg, "min-h-screen")}>
@@ -107,6 +235,18 @@ export default function SalesByDayDashboard() {
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => setCompare((v) => !v)}
+                className={cn(
+                  "inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-extrabold transition border",
+                  compare
+                    ? "bg-purple-500/20 border-purple-400/40 text-white shadow-md shadow-purple-500/10"
+                    : "bg-white/10 border-white/15 text-white/80 hover:bg-white/15"
+                )}
+              >
+                <GitCompareArrows className="w-4 h-4" />
+                {compare ? `Comparando: ${getMonthLabel(prevMonth)}` : "Comparar mês anterior"}
+              </button>
               <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/10 border border-white/15">
                 <Calendar className="w-4 h-4 text-white/90" />
                 <input
@@ -127,35 +267,52 @@ export default function SalesByDayDashboard() {
           </div>
 
           <div className="mt-5 grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
-              <div className="text-xs text-white/80 font-semibold">Total</div>
-              <div className="text-lg font-black">{formatMoney(totals.total)}</div>
-              <div className="text-xs text-white/70 mt-0.5">{totals.totalOrders} pedidos</div>
-            </div>
-            <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
-              <div className="text-xs text-white/80 font-semibold">Shopee</div>
-              <div className="text-lg font-black">{formatMoney(totals.shopee)}</div>
-              <div className="text-xs text-white/70 mt-0.5">{totals.shopeeOrders} pedidos</div>
-            </div>
-            <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
-              <div className="text-xs text-white/80 font-semibold">TikTok</div>
-              <div className="text-lg font-black">{formatMoney(totals.tiktok)}</div>
-              <div className="text-xs text-white/70 mt-0.5">{totals.tiktokOrders} pedidos</div>
-            </div>
-            <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
-              <div className="text-xs text-white/80 font-semibold">Tray</div>
-              <div className="text-lg font-black">{formatMoney(totals.tray)}</div>
-              <div className="text-xs text-white/70 mt-0.5">{totals.trayOrders} pedidos</div>
-            </div>
+            {[
+              { label: "Total", value: totals.total, orders: totals.totalOrders, prev: prevTotals.total },
+              { label: "Shopee", value: totals.shopee, orders: totals.shopeeOrders, prev: prevTotals.shopee },
+              { label: "TikTok", value: totals.tiktok, orders: totals.tiktokOrders, prev: prevTotals.tiktok },
+              { label: "Tray", value: totals.tray, orders: totals.trayOrders, prev: prevTotals.tray },
+            ].map((card) => {
+              const delta = compare ? formatDelta(card.value, card.prev) : null;
+              return (
+                <div key={card.label} className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
+                  <div className="text-xs text-white/80 font-semibold">{card.label}</div>
+                  <div className="text-lg font-black">{formatMoney(card.value)}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-white/70">{card.orders} pedidos</span>
+                    {delta && (
+                      <span className={cn("text-xs font-bold", delta.color)}>{delta.text}</span>
+                    )}
+                  </div>
+                  {compare && (
+                    <div className="text-[10px] text-white/50 mt-0.5">
+                      Anterior: {formatMoney(card.prev)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
         <div className={cn(UI.card, "overflow-hidden")}>
-          <div className="px-6 pt-6">
-            <h3 className="text-sm font-extrabold tracking-wide text-slate-900">Gráfico de vendas por dia</h3>
-            <p className="mt-1 text-xs text-slate-500">Valores agrupados por dia e canal de venda</p>
+          <div className="px-6 pt-6 flex items-start justify-between">
+            <div>
+              <h3 className="text-sm font-extrabold tracking-wide text-slate-900">Gráfico de vendas por dia</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                {compare
+                  ? `Barras: ${getMonthLabel(month)} • Linha roxa: ${getMonthLabel(prevMonth)}`
+                  : "Valores agrupados por dia e canal de venda"}
+              </p>
+            </div>
+            {compare && (
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <span className="inline-block w-6 h-0.5 bg-purple-500 rounded" style={{ borderTop: "2px dashed #A855F7" }} />
+                <span>Mês anterior (total)</span>
+              </div>
+            )}
           </div>
           <div className="p-6">
             {loading ? (
@@ -165,10 +322,10 @@ export default function SalesByDayDashboard() {
             ) : (
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={rows} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+                  <ComposedChart data={chartData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
                     <XAxis
-                      dataKey="name"
+                      dataKey={compare ? "dayLabel" : "name"}
                       axisLine={false}
                       tickLine={false}
                       tick={{ fill: "#64748B", fontSize: 11 }}
@@ -179,25 +336,28 @@ export default function SalesByDayDashboard() {
                       tick={{ fill: "#64748B", fontSize: 12 }}
                       tickFormatter={(v) => formatCompact(Number(v))}
                     />
-                    <Tooltip
-                      formatter={(value: unknown, name?: string, item?: { payload?: DayRow }) => {
-                        const payload = item?.payload;
-                        const channelName = name ?? "";
-                        const orders = channelName === "Shopee" ? payload?.shopeeOrders : channelName === "TikTok" ? payload?.tiktokOrders : payload?.trayOrders;
-                        const label = typeof orders === "number" ? `${formatMoney(Number(value || 0))} (${orders} pedidos)` : formatMoney(Number(value || 0));
-                        return [label, channelName];
-                      }}
-                      contentStyle={{
-                        borderRadius: 14,
-                        border: "1px solid #E2E8F0",
-                        boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
-                      }}
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend
+                      formatter={(value: string) => (
+                        <span className="text-xs font-semibold text-slate-700">{value}</span>
+                      )}
                     />
-                    <Legend />
                     <Bar dataKey="shopee" name="Shopee" stackId="a" fill={CHANNEL_COLORS.shopee} radius={[0, 0, 0, 0]} />
                     <Bar dataKey="tiktok" name="TikTok" stackId="a" fill={CHANNEL_COLORS.tiktok} radius={[0, 0, 0, 0]} />
                     <Bar dataKey="tray" name="Tray" stackId="a" fill={CHANNEL_COLORS.tray} radius={[4, 4, 0, 0]} />
-                  </BarChart>
+                    {compare && (
+                      <Line
+                        dataKey="prevTotal"
+                        name={`Total ${getMonthLabel(prevMonth)}`}
+                        type="monotone"
+                        stroke={PREV_MONTH_COLOR}
+                        strokeWidth={2.5}
+                        strokeDasharray="6 3"
+                        dot={{ r: 3, fill: PREV_MONTH_COLOR, strokeWidth: 0 }}
+                        activeDot={{ r: 5, fill: PREV_MONTH_COLOR, strokeWidth: 2, stroke: "#fff" }}
+                      />
+                    )}
+                  </ComposedChart>
                 </ResponsiveContainer>
               </div>
             )}
@@ -207,7 +367,9 @@ export default function SalesByDayDashboard() {
         <div className={cn(UI.card, "overflow-hidden")}>
           <div className="px-6 pt-6">
             <h3 className="text-sm font-extrabold tracking-wide text-slate-900">Tabela por dia</h3>
-            <p className="mt-1 text-xs text-slate-500">Detalhamento dia a dia por canal</p>
+            <p className="mt-1 text-xs text-slate-500">
+              {compare ? "Detalhamento dia a dia com comparação do mês anterior" : "Detalhamento dia a dia por canal"}
+            </p>
           </div>
           <div className="p-6 overflow-auto">
             {loading ? (
@@ -219,35 +381,61 @@ export default function SalesByDayDashboard() {
                 <table className="w-full text-sm">
                   <thead className="bg-slate-100 border-b border-slate-200">
                     <tr className="text-left text-xs font-extrabold tracking-widest uppercase text-slate-600">
-                      <th className="px-4 py-3">Data</th>
+                      <th className="px-4 py-3">Dia</th>
                       <th className="px-4 py-3 text-right">Shopee</th>
                       <th className="px-4 py-3 text-right">TikTok</th>
                       <th className="px-4 py-3 text-right">Tray</th>
                       <th className="px-4 py-3 text-right">Total</th>
+                      {compare && (
+                        <>
+                          <th className="px-4 py-3 text-right text-purple-600">Ant. Total</th>
+                          <th className="px-4 py-3 text-right">Variação</th>
+                        </>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {rows.map((r) => (
-                      <tr key={r.date} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-semibold text-slate-900">{r.name}</td>
-                        <td className="px-4 py-3 text-right text-slate-700">
-                          <span className="block">{formatMoney(r.shopee)}</span>
-                          <span className="text-xs text-slate-500">{(r.shopeeOrders ?? 0)} pedidos</span>
-                        </td>
-                        <td className="px-4 py-3 text-right text-slate-700">
-                          <span className="block">{formatMoney(r.tiktok)}</span>
-                          <span className="text-xs text-slate-500">{(r.tiktokOrders ?? 0)} pedidos</span>
-                        </td>
-                        <td className="px-4 py-3 text-right text-slate-700">
-                          <span className="block">{formatMoney(r.tray)}</span>
-                          <span className="text-xs text-slate-500">{(r.trayOrders ?? 0)} pedidos</span>
-                        </td>
-                        <td className="px-4 py-3 text-right font-bold text-slate-900">
-                          <span className="block">{formatMoney(r.total)}</span>
-                          <span className="text-xs font-normal text-slate-500">{(r.totalOrders ?? 0)} pedidos</span>
-                        </td>
-                      </tr>
-                    ))}
+                    {mergedRows.map((r) => {
+                      const delta = compare && r.prevTotal !== undefined ? formatDelta(r.total, r.prevTotal) : null;
+                      return (
+                        <tr key={r.date} className="hover:bg-slate-50">
+                          <td className="px-4 py-3 font-semibold text-slate-900">{r.day}</td>
+                          <td className="px-4 py-3 text-right text-slate-700">
+                            <span className="block">{formatMoney(r.shopee)}</span>
+                            <span className="text-xs text-slate-500">{r.shopeeOrders ?? 0} pedidos</span>
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-700">
+                            <span className="block">{formatMoney(r.tiktok)}</span>
+                            <span className="text-xs text-slate-500">{r.tiktokOrders ?? 0} pedidos</span>
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-700">
+                            <span className="block">{formatMoney(r.tray)}</span>
+                            <span className="text-xs text-slate-500">{r.trayOrders ?? 0} pedidos</span>
+                          </td>
+                          <td className="px-4 py-3 text-right font-bold text-slate-900">
+                            <span className="block">{formatMoney(r.total)}</span>
+                            <span className="text-xs font-normal text-slate-500">{r.totalOrders ?? 0} pedidos</span>
+                          </td>
+                          {compare && (
+                            <>
+                              <td className="px-4 py-3 text-right text-purple-700">
+                                <span className="block">{r.prevTotal !== undefined ? formatMoney(r.prevTotal) : "—"}</span>
+                                {r.prevTotalOrders !== undefined && (
+                                  <span className="text-xs text-purple-400">{r.prevTotalOrders} pedidos</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                {delta && (
+                                  <span className={cn("font-bold text-sm", delta.color.replace("text-emerald-400", "text-emerald-600").replace("text-red-400", "text-red-600"))}>
+                                    {delta.text}
+                                  </span>
+                                )}
+                              </td>
+                            </>
+                          )}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
