@@ -1857,13 +1857,11 @@ async function main() {
   });
 
   // Simulação P&L por mês e canal
-  // GET /api/simulation?month=2026-01&channel=shopee|tiktok|tray|all&fixedCost=2459&cardPixPercent=3.63
+  // GET /api/simulation?month=2026-01&channel=shopee|tiktok|tray|all
   app.get('/api/simulation', async (req, res) => {
     try {
       const monthStr = String(req.query.month ?? '').trim();
       const channel = String(req.query.channel ?? 'all').trim().toLowerCase();
-      const fixedCost = parseBrNumber(req.query.fixedCost ?? 0);
-      const cardPixPercent = parseBrNumber(req.query.cardPixPercent ?? 3.63);
       const taxPercent = 5;
 
       const monthStart = monthStartFromYYYYMM(monthStr);
@@ -1906,7 +1904,7 @@ async function main() {
         for (const r of feeRows) feeMap.set(String(r.paymentType || '').trim(), Number(r.percent || 0));
         for (const o of trayOrders) {
           const pt = String((o as any).paymentType || '').trim();
-          const pct = feeMap.get(pt) ?? cardPixPercent;
+          const pct = feeMap.get(pt) ?? 0;
           cardPix += (o.totalPrice || 0) * (pct / 100);
         }
       }
@@ -1933,6 +1931,16 @@ async function main() {
         },
       });
       const adsSpend = adSpendRows.reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+
+      // Fixed cost from Bills with isFixedCost=true, summing BillPayment.amount due in the month
+      const fixedCostPayments = await (prisma as any).billPayment.findMany({
+        where: {
+          dueDate: { gte: monthStart, lt: monthEnd },
+          bill: { isFixedCost: true },
+        },
+        include: { bill: true },
+      });
+      const fixedCost = fixedCostPayments.reduce((s: number, p: any) => s + Number(p.amount || 0), 0);
 
       const allOrdersForProportion = channel !== 'all'
         ? await prisma.order.findMany({
