@@ -55,8 +55,6 @@ export default function Simulation(): JSX.Element {
   const defaultMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const [month, setMonth] = useState(defaultMonth);
   const [channel, setChannel] = useState<string>("all");
-  const [fixedCost, setFixedCost] = useState<string>("2459");
-  const [cardPixPercent, setCardPixPercent] = useState<string>("3.63");
 
   async function fetchData() {
     setLoading(true);
@@ -65,8 +63,6 @@ export default function Simulation(): JSX.Element {
       const qs = new URLSearchParams();
       qs.set("month", month);
       qs.set("channel", channel);
-      if (fixedCost) qs.set("fixedCost", fixedCost);
-      if (cardPixPercent) qs.set("cardPixPercent", cardPixPercent);
       const res = await fetch(`${API_URL}/api/simulation?${qs.toString()}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || "Falha ao carregar simulação.");
@@ -100,7 +96,7 @@ export default function Simulation(): JSX.Element {
             <div className="flex-1 min-w-0">
               <h2 className="text-lg font-black tracking-tight text-slate-900">Simulação P&L</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Resultado por mês e canal. Custo fixo proporcional ao faturamento. Taxas Cartão/PIX (Tray) vêm da tela Taxas Tray.
+                Resultado por mês e canal. Custo fixo calculado das contas a pagar (flag custo fixo). Taxas Cartão/PIX via cadastro Taxas Tray.
               </p>
             </div>
             <div className="flex flex-wrap items-end gap-3">
@@ -129,30 +125,6 @@ export default function Simulation(): JSX.Element {
                   <option value="tiktok">TikTok</option>
                   <option value="tray">Tray</option>
                 </select>
-              </div>
-              <div>
-                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
-                  Custo fixo (R$)
-                </label>
-                <input
-                  type="text"
-                  value={fixedCost}
-                  onChange={(e) => setFixedCost(e.target.value)}
-                  placeholder="2459"
-                  className="mt-2 w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
-                  Taxa Cartão/PIX (%)
-                </label>
-                <input
-                  type="text"
-                  value={cardPixPercent}
-                  onChange={(e) => setCardPixPercent(e.target.value)}
-                  placeholder="3.63"
-                  className="mt-2 w-20 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
-                />
               </div>
               <button
                 onClick={fetchData}
