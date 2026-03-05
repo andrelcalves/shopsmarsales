@@ -355,29 +355,25 @@ export default function SalesByDayDashboard() {
                     <Bar dataKey="shopee" name="Shopee" stackId="a" fill={CHANNEL_COLORS.shopee} radius={[0, 0, 0, 0]} />
                     <Bar dataKey="tiktok" name="TikTok" stackId="a" fill={CHANNEL_COLORS.tiktok} radius={[0, 0, 0, 0]} />
                     <Bar dataKey="tray" name="Tray" stackId="a" fill={CHANNEL_COLORS.tray} radius={[4, 4, 0, 0]} />
-                    {compare && (
-                      <>
-                        <Line
-                          dataKey="total"
-                          name={`Total ${getMonthLabel(month)}`}
-                          type="monotone"
-                          stroke="#10B981"
-                          strokeWidth={2.5}
-                          dot={{ r: 3, fill: "#10B981", strokeWidth: 0 }}
-                          activeDot={{ r: 5, fill: "#10B981", strokeWidth: 2, stroke: "#fff" }}
-                        />
-                        <Line
-                          dataKey="prevTotal"
-                          name={`Total ${getMonthLabel(prevMonth)}`}
-                          type="monotone"
-                          stroke={PREV_MONTH_COLOR}
-                          strokeWidth={2.5}
-                          strokeDasharray="6 3"
-                          dot={{ r: 3, fill: PREV_MONTH_COLOR, strokeWidth: 0 }}
-                          activeDot={{ r: 5, fill: PREV_MONTH_COLOR, strokeWidth: 2, stroke: "#fff" }}
-                        />
-                      </>
-                    )}
+                    {compare && <Line
+                      dataKey="total"
+                      name={`Total ${getMonthLabel(month)}`}
+                      type="monotone"
+                      stroke="#10B981"
+                      strokeWidth={2.5}
+                      dot={{ r: 3, fill: "#10B981", strokeWidth: 0 }}
+                      activeDot={{ r: 5, fill: "#10B981", strokeWidth: 2, stroke: "#fff" }}
+                    />}
+                    {compare && <Line
+                      dataKey="prevTotal"
+                      name={`Total ${getMonthLabel(prevMonth)}`}
+                      type="monotone"
+                      stroke={PREV_MONTH_COLOR}
+                      strokeWidth={2.5}
+                      strokeDasharray="6 3"
+                      dot={{ r: 3, fill: PREV_MONTH_COLOR, strokeWidth: 0 }}
+                      activeDot={{ r: 5, fill: PREV_MONTH_COLOR, strokeWidth: 2, stroke: "#fff" }}
+                    />}
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
