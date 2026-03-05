@@ -21,11 +21,27 @@ model Order {
   createdAt   DateTime @default(now())
   status      String   @default("")
   items       OrderItem[]
+  returnRecord OrderReturn?
   commissionFee Float?  // Net Commission Fee (taxa de comissão líquida)
   serviceFee    Float?  // Taxa de serviço bruta
   freight       Float?  // Frete (apenas canal tray)
   paymentType   String? @default("")  // Tipo de pagamento (ex: Pix - Vindi, Cartão de Crédito - Mercado Pago)
   @@unique([orderId, source])
+}
+
+model OrderReturn {
+  id           Int      @id @default(autoincrement())
+  orderId      String
+  source       String
+  reason       String   // ex: "Endereço não encontrado", "Não Serviu"
+  notes        String   @default("")
+  returnDate   DateTime
+  createdAt    DateTime @default(now())
+
+  order Order @relation(fields: [orderId, source], references: [orderId, source], onDelete: Cascade)
+
+  @@unique([orderId, source])
+  @@index([returnDate])
 }
 
 model OrderItem {

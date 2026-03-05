@@ -1875,6 +1875,7 @@ async function main() {
         NOT: [
           { status: { contains: 'ancelado', mode: 'insensitive' } },
           { status: { contains: 'Não pago', mode: 'insensitive' } },
+          { status: 'Devolvido' },
         ],
       };
       if (channel !== 'all') orderWhere.source = channel;
@@ -2089,7 +2090,8 @@ app.get('/api/dashboard', async (_req, res) => {
       where: {
         NOT: [
           { status: { contains: 'Cancelado' } },
-          { status: { contains: 'Não pago' } }
+          { status: { contains: 'Não pago' } },
+          { status: 'Devolvido' },
         ]
       },
       orderBy: { orderDate: 'asc' }
@@ -2144,6 +2146,7 @@ app.get('/api/dashboard', async (_req, res) => {
           NOT: [
             { status: { contains: 'Cancelado' } },
             { status: { contains: 'Não pago' } },
+            { status: 'Devolvido' },
           ],
         },
       },
@@ -2211,6 +2214,7 @@ app.get('/api/dashboard', async (_req, res) => {
             NOT: [
               { status: { contains: 'Cancelado' } },
               { status: { contains: 'Não pago' } },
+              { status: 'Devolvido' },
             ],
           },
         },
@@ -2290,6 +2294,7 @@ app.get('/api/dashboard', async (_req, res) => {
           NOT: [
             { status: { contains: 'ancelado', mode: 'insensitive' } },
             { status: { contains: 'Não pago', mode: 'insensitive' } },
+            { status: 'Devolvido' },
           ],
         },
         select: { orderDate: true, source: true, totalPrice: true },
@@ -2742,6 +2747,117 @@ app.get('/api/dashboard', async (_req, res) => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // ORDER RETURNS (devoluções)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Search orders for return registration
+  app.get('/api/orders/search', async (req, res) => {
+    try {
+      const q = String(req.query.q ?? '').trim();
+      if (!q) return res.json([]);
+      const orders = await prisma.order.findMany({
+        where: {
+          OR: [
+            { orderId: { contains: q, mode: 'insensitive' } },
+            { productName: { contains: q, mode: 'insensitive' } },
+          ],
+        },
+        include: { returnRecord: true },
+        orderBy: { orderDate: 'desc' },
+        take: 20,
+      });
+      return res.json(orders);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar pedidos.' });
+    }
+  });
+
+  // Register a return (devolução)
+  app.post('/api/returns', express.json(), async (req, res) => {
+    try {
+      const { orderId, source, reason, notes, returnDate } = req.body ?? {};
+      if (!orderId || !source || !reason || !returnDate) {
+        return res.status(400).json({ message: 'orderId, source, reason e returnDate são obrigatórios.' });
+      }
+
+      const order = await prisma.order.findUnique({
+        where: { orderId_source: { orderId: String(orderId), source: String(source) } },
+      });
+      if (!order) return res.status(404).json({ message: 'Pedido não encontrado.' });
+
+      const prismaAny = prisma as any;
+      const returnRecord = await prismaAny.orderReturn.create({
+        data: {
+          orderId: String(orderId),
+          source: String(source),
+          reason: String(reason),
+          notes: String(notes ?? ''),
+          returnDate: new Date(returnDate),
+        },
+      });
+
+      await prisma.order.update({
+        where: { orderId_source: { orderId: String(orderId), source: String(source) } },
+        data: { status: 'Devolvido' },
+      });
+
+      return res.status(201).json(returnRecord);
+    } catch (e: any) {
+      if (e?.code === 'P2002') return res.status(400).json({ message: 'Este pedido já possui uma devolução registrada.' });
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao registrar devolução.' });
+    }
+  });
+
+  // List all returns
+  app.get('/api/returns', async (req, res) => {
+    try {
+      const monthStr = String(req.query.month ?? '').trim();
+      let dateFilter: any = {};
+      if (monthStr) {
+        const [y, m] = monthStr.split('-').map(Number);
+        const start = new Date(y, m - 1, 1);
+        const end = new Date(y, m, 1);
+        dateFilter = { returnDate: { gte: start, lt: end } };
+      }
+
+      const prismaAny = prisma as any;
+      const returns = await prismaAny.orderReturn.findMany({
+        where: dateFilter,
+        include: {
+          order: { select: { productName: true, totalPrice: true, quantity: true, orderDate: true, status: true } },
+        },
+        orderBy: { returnDate: 'desc' },
+      });
+      return res.json(returns);
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao listar devoluções.' });
+    }
+  });
+
+  // Delete a return (undo)
+  app.delete('/api/returns/:orderId/:source', async (req, res) => {
+    try {
+      const { orderId, source } = req.params;
+      const prismaAny = prisma as any;
+      await prismaAny.orderReturn.delete({
+        where: { orderId_source: { orderId, source } },
+      });
+      // Restore order status
+      await prisma.order.update({
+        where: { orderId_source: { orderId, source } },
+        data: { status: '' },
+      });
+      return res.json({ ok: true });
+    } catch (e: any) {
+      if (e?.code === 'P2025') return res.status(404).json({ message: 'Devolução não encontrada.' });
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao remover devolução.' });
+    }
+  });
+
   // PRODUCT CONSOLIDATION (cross-channel)
   // ═══════════════════════════════════════════════════════════════════════════
 
