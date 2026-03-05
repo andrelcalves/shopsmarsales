@@ -348,9 +348,31 @@ export default function SalesByDayDashboard() {
                     />
                     <Tooltip content={<CustomTooltip />} />
                     <Legend
-                      formatter={(value: string) => (
-                        <span className="text-xs font-semibold text-slate-700">{value}</span>
-                      )}
+                      content={() => {
+                        const items: { label: string; color: string; type: "square" | "line"; dash?: boolean }[] = [
+                          { label: "Shopee", color: CHANNEL_COLORS.shopee, type: "square" },
+                          { label: "TikTok", color: CHANNEL_COLORS.tiktok, type: "square" },
+                          { label: "Tray", color: CHANNEL_COLORS.tray, type: "square" },
+                        ];
+                        if (compare) {
+                          items.push({ label: `Total ${getMonthLabel(month)}`, color: "#10B981", type: "line" });
+                          items.push({ label: `Total ${getMonthLabel(prevMonth)}`, color: PREV_MONTH_COLOR, type: "line", dash: true });
+                        }
+                        return (
+                          <div className="flex flex-wrap justify-center gap-x-5 gap-y-1 pt-2">
+                            {items.map((it) => (
+                              <div key={it.label} className="flex items-center gap-1.5">
+                                {it.type === "square" ? (
+                                  <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: it.color }} />
+                                ) : (
+                                  <span className="inline-block w-5 h-0.5 rounded" style={it.dash ? { borderTop: `2px dashed ${it.color}` } : { backgroundColor: it.color }} />
+                                )}
+                                <span className="text-xs font-semibold text-slate-700">{it.label}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      }}
                     />
                     <Bar dataKey="shopee" name="Shopee" stackId="a" fill={CHANNEL_COLORS.shopee} radius={[0, 0, 0, 0]} />
                     <Bar dataKey="tiktok" name="TikTok" stackId="a" fill={CHANNEL_COLORS.tiktok} radius={[0, 0, 0, 0]} />
@@ -363,7 +385,7 @@ export default function SalesByDayDashboard() {
                       strokeWidth={compare ? 2.5 : 0}
                       dot={compare ? { r: 3, fill: "#10B981", strokeWidth: 0 } : false}
                       activeDot={compare ? { r: 5, fill: "#10B981", strokeWidth: 2, stroke: "#fff" } : false}
-                      legendType={compare ? "line" : "none"}
+                      legendType="none"
                     />
                     <Line
                       dataKey="prevTotal"
@@ -374,7 +396,7 @@ export default function SalesByDayDashboard() {
                       strokeDasharray="6 3"
                       dot={compare ? { r: 3, fill: PREV_MONTH_COLOR, strokeWidth: 0 } : false}
                       activeDot={compare ? { r: 5, fill: PREV_MONTH_COLOR, strokeWidth: 2, stroke: "#fff" } : false}
-                      legendType={compare ? "line" : "none"}
+                      legendType="none"
                     />
                   </ComposedChart>
                 </ResponsiveContainer>
