@@ -14,6 +14,7 @@ import BillsDashboard from './BillsDashboard';
 import Pricing from './Pricing';
 import ShopeeIntegration from './ShopeeIntegration';
 import ProductCurve from './ProductCurve';
+import Returns from './Returns';
 
 const API_URL = 'http://localhost:4000';
 
@@ -38,7 +39,7 @@ interface Sale {
 
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'product_curve'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'product_curve' | 'returns'>('upload');
 
   // --- LÓGICA DA TELA DE UPLOAD ---
   const [file, setFile] = useState<File | null>(null);
@@ -182,7 +183,9 @@ function App() {
                                         ? 'Integrações'
                                         : currentView === 'product_curve'
                                           ? 'Curva ABC'
-                                          : 'Simulação'}
+                                          : currentView === 'returns'
+                                            ? 'Devoluções'
+                                            : 'Simulação'}
               </h1>
               <p className="mt-1 text-white/80 text-sm">Shopee + TikTok + Tray • Importação e visualização</p>
             </div>
@@ -325,6 +328,15 @@ function App() {
                 >
                   Integrações
                 </button>
+                <button
+                  onClick={() => setCurrentView('returns')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'returns' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Devoluções
+                </button>
               </div>
             </div>
           </div>
@@ -358,6 +370,8 @@ function App() {
         <ShopeeIntegration />
       ) : currentView === 'product_curve' ? (
         <ProductCurve />
+      ) : currentView === 'returns' ? (
+        <Returns />
       ) : (
         <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
           {/* Card: Upload */}
