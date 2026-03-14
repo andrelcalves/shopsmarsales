@@ -1,0 +1,4 @@
+# Deploy state and temp files (contains secrets like DATABASE_URL)
+.deploy-state.json
+task-def.json
+cf-config.json

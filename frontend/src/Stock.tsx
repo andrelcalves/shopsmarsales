@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 
-const API_URL = "http://localhost:4000";
+import { API_URL } from './config';
 
 type InventoryConfig = { stockStartDate: string | null };
 type ProductStockRow = { productId: number; product: { id: number; code: string; name: string }; quantity: number };

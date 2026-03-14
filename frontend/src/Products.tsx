@@ -12,7 +12,7 @@ import {
   Pencil,
 } from "lucide-react";
 
-const API_URL = "http://localhost:4000";
+import { API_URL } from './config';
 
 type Product = {
   id: number;

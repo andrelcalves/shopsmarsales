@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-const API_URL = "http://localhost:4000";
+import { API_URL } from './config';
 
 type ChannelRow = { channel: string; revenue: number; spend: number; roas: number | null };
 type MonthRow = { month: string; revenue: number; spend: number; roas: number | null; byChannel: ChannelRow[] };

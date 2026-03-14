@@ -14,7 +14,7 @@ import {
 } from "recharts";
 import { RefreshCcw, TrendingUp, Package, Search, ChevronDown, ChevronUp, Layers } from "lucide-react";
 
-const API = "http://localhost:4000";
+import { API_URL as API } from './config';
 
 function cn(...c: Array<string | false | undefined | null>) {
   return c.filter(Boolean).join(" ");
