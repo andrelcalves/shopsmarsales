@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Search, RotateCcw, Trash2, ChevronDown, ChevronUp, PackageX, AlertTriangle } from 'lucide-react';
 
-const API_URL = 'http://localhost:4000';
+import { API_URL } from './config';
 
 const UI = {
   card: 'bg-white/90 backdrop-blur border border-slate-200 shadow-sm rounded-2xl',

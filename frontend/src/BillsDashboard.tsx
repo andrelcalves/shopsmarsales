@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from "react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LabelList } from "recharts";
 import { RefreshCcw, CreditCard } from "lucide-react";
 
-const API_URL = "http://localhost:4000";
+import { API_URL } from './config';
 
 type BillPayment = {
   id: number;

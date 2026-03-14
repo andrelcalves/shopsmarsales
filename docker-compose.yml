@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: shopsmarsales
+      POSTGRES_USER: shopsmarsales_admin
+      POSTGRES_PASSWORD: localdev123
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      DATABASE_URL: postgresql://shopsmarsales_admin:localdev123@db:5432/shopsmarsales
+      PORT: "4000"
+      FRONTEND_URL: http://localhost:3000
+    depends_on:
+      - db
+
+volumes:
+  pgdata:

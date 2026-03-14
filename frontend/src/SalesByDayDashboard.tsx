@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import { BarChart3, Calendar, RefreshCcw, GitCompareArrows } from "lucide-react";
 
-const API_URL = "http://localhost:4000";
+import { API_URL } from './config';
 
 type DayRow = {
   date: string;

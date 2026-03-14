@@ -16,7 +16,8 @@ import ShopeeIntegration from './ShopeeIntegration';
 import ProductCurve from './ProductCurve';
 import Returns from './Returns';
 
-const API_URL = 'http://localhost:4000';
+import { API_URL } from './config';
+
 
 const UI = {
   bg: 'bg-slate-50',

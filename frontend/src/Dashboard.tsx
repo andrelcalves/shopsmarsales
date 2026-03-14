@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
+import { API_URL } from './config';
 import {
   ResponsiveContainer,
   BarChart,
@@ -152,7 +153,7 @@ export default function DashboardBI() {
     setLoading(true);
     try {
       // se quiser: /api/dashboard?range=30d
-      const res = await axios.get("http://localhost:4000/api/dashboard");
+      const res = await axios.get(`${API_URL}/api/dashboard`);
       setData(res.data);
       setLastUpdate(new Date());
     } catch (e) {
