@@ -58,6 +58,8 @@ const SOURCE_BADGE: Record<string, string> = {
   shopee: "bg-orange-600",
   tiktok: "bg-slate-800",
   tray: "bg-indigo-700",
+  tray_atacado: "bg-sky-900",
+  tray_varejo: "bg-sky-500",
 };
 
 function SourceBadge({ source }: { source: string }) {
@@ -324,7 +326,9 @@ export default function Products() {
                     <option value="all">Todos canais</option>
                     <option value="shopee">Shopee</option>
                     <option value="tiktok">TikTok</option>
-                    <option value="tray">Tray</option>
+                    <option value="tray">Tray (legado)</option>
+                    <option value="tray_atacado">Tray Atacado</option>
+                    <option value="tray_varejo">Tray Varejo</option>
                   </select>
                   <div className="flex items-center gap-2">
                     <Search className="w-4 h-4 text-slate-400" />

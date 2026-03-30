@@ -23,13 +23,17 @@ type ChannelConfig = {
 const CHANNELS = [
   { id: "shopee", label: "Shopee" },
   { id: "tiktok", label: "TikTok" },
-  { id: "tray", label: "Tray" },
+  { id: "tray", label: "Tray (todos)" },
+  { id: "tray_atacado", label: "Tray Atacado" },
+  { id: "tray_varejo", label: "Tray Varejo" },
 ] as const;
 
 const DEFAULT_CONFIG: Record<string, ChannelConfig> = {
   shopee: { commissionPercent: 15, adsPercent: 10, fixedCostPercent: 5, taxPercent: 0, profitPercent: 15 },
   tiktok: { commissionPercent: 12, adsPercent: 8, fixedCostPercent: 5, taxPercent: 0, profitPercent: 18 },
   tray: { commissionPercent: 0, adsPercent: 0, fixedCostPercent: 5, taxPercent: 0, profitPercent: 20 },
+  tray_atacado: { commissionPercent: 0, adsPercent: 0, fixedCostPercent: 5, taxPercent: 0, profitPercent: 20 },
+  tray_varejo: { commissionPercent: 0, adsPercent: 0, fixedCostPercent: 5, taxPercent: 0, profitPercent: 20 },
 };
 
 const UI = {

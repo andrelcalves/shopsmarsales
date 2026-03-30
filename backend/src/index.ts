@@ -26,6 +26,90 @@ function pick(row: Record<string, unknown>, keys: string[]) {
   return undefined;
 }
 
+/** Tray: loja atacado 987162 (pedidos costumam começar com 5); varejo 1178940 (com 2). */
+const TRAY_STORE_ID_ATACADO = '987162';
+const TRAY_STORE_ID_VAREJO = '1178940';
+const TRAY_SOURCE_ATACADO = 'tray_atacado';
+const TRAY_SOURCE_VAREJO = 'tray_varejo';
+const TRAY_ORDER_SOURCES_LIST = [TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO, 'tray'] as const;
+
+function trayDigitsOnly(s: string): string {
+  return String(s || '').replace(/\D/g, '');
+}
+
+/** Define o `source` do pedido Tray a partir da planilha (loja) ou do prefixo do número do pedido. */
+function resolveTraySubSource(row: Record<string, unknown> | null, orderId: string): string {
+  const oid = String(orderId || '').trim();
+  const storeVal = row
+    ? pick(row, [
+        'Loja',
+        'Identificador loja',
+        'Identificador da loja',
+        'ID loja',
+        'Id loja',
+        'Código loja',
+        'Codigo loja',
+        'Store ID',
+        'Store id',
+      ])
+    : undefined;
+  if (storeVal != null && String(storeVal).trim()) {
+    const d = trayDigitsOnly(String(storeVal));
+    if (d === TRAY_STORE_ID_ATACADO) return TRAY_SOURCE_ATACADO;
+    if (d === TRAY_STORE_ID_VAREJO) return TRAY_SOURCE_VAREJO;
+  }
+  const first = oid.charAt(0);
+  if (first === '5') return TRAY_SOURCE_ATACADO;
+  if (first === '2') return TRAY_SOURCE_VAREJO;
+  if (oid) console.warn('[tray] Canal não identificado (nem loja nem prefixo 5/2); gravando como tray legado:', oid);
+  return 'tray';
+}
+
+function isTrayOrderSource(source: string): boolean {
+  const s = String(source || '').toLowerCase();
+  return s === 'tray' || s === TRAY_SOURCE_ATACADO || s === TRAY_SOURCE_VAREJO;
+}
+
+/** Upload de CSV Tray (pedidos ou itens): delimitador `;` e parser de linha Tray. */
+function isTrayUploadSource(source: string): boolean {
+  return isTrayOrderSource(String(source || '').toLowerCase());
+}
+
+function feeChannelForTrayOrder(orderSource: string, orderId: string): string {
+  if (orderSource === TRAY_SOURCE_ATACADO || orderSource === TRAY_SOURCE_VAREJO) return orderSource;
+  if (orderSource === 'tray') return resolveTraySubSource(null, orderId);
+  return orderSource;
+}
+
+function channelLabelForChart(source: string): string {
+  switch (source) {
+    case 'shopee':
+      return 'Shopee';
+    case 'tiktok':
+      return 'TikTok';
+    case TRAY_SOURCE_ATACADO:
+      return 'Tray Atacado';
+    case TRAY_SOURCE_VAREJO:
+      return 'Tray Varejo';
+    case 'tray':
+      return 'Tray (legado)';
+    default:
+      return source.charAt(0).toUpperCase() + source.slice(1);
+  }
+}
+
+function bucketTrayMetrics(source: string, orderId: string): 'trayAtacado' | 'trayVarejo' | 'trayLegacy' {
+  if (source === TRAY_SOURCE_ATACADO) return 'trayAtacado';
+  if (source === TRAY_SOURCE_VAREJO) return 'trayVarejo';
+  if (source === 'tray') {
+    const r = resolveTraySubSource(null, orderId);
+    if (r === TRAY_SOURCE_ATACADO) return 'trayAtacado';
+    if (r === TRAY_SOURCE_VAREJO) return 'trayVarejo';
+    return 'trayLegacy';
+  }
+  return 'trayLegacy';
+}
+
 /** Parsea YYYY-MM-DD como meio-dia UTC para não perder um dia em fusos como Brasil. */
 function parseDateOnlyAsNoonUTC(dateStr: string | null | undefined): Date | null {
   if (dateStr == null || String(dateStr).trim() === '') return null;
@@ -204,6 +288,83 @@ function standardizeShopeeRow(row: Record<string, unknown>): StandardizedShopeeI
   }
 }
 
+const SHOPEE_DUP_PRICE_EPS = 0.02;
+
+/** Duas linhas do mesmo pedido Shopee representando o mesmo SKU (planilha pai + variação ou API/CSV mistos). */
+function shopeeOrderItemsDuplicateShape(
+  a: { name: string; productCode: string; unitPrice: number; quantity: number; totalPrice: number },
+  b: { name: string; productCode: string; unitPrice: number; quantity: number; totalPrice: number },
+): boolean {
+  const na = String(a.name || '').trim();
+  const nb = String(b.name || '').trim();
+  const ca = String(a.productCode || '').trim();
+  const cb = String(b.productCode || '').trim();
+  if (na === nb && ca === cb) return false;
+  if (Math.abs(a.unitPrice - b.unitPrice) > SHOPEE_DUP_PRICE_EPS) return false;
+  if (ca !== cb && (ca.startsWith(`${cb}_`) || cb.startsWith(`${ca}_`))) return true;
+  const shorter = na.length <= nb.length ? na : nb;
+  const longer = na.length > nb.length ? na : nb;
+  if (longer.startsWith(`${shorter} - `)) return true;
+  return false;
+}
+
+function clusterShopeeDuplicateIndices<
+  T extends { name: string; productCode: string; unitPrice: number; quantity: number; totalPrice: number },
+>(items: T[]): number[][] {
+  const n = items.length;
+  if (n === 0) return [];
+  const parent = [...Array(n).keys()];
+  function find(i: number): number {
+    if (parent[i] !== i) parent[i] = find(parent[i]);
+    return parent[i];
+  }
+  function union(i: number, j: number) {
+    const ri = find(i);
+    const rj = find(j);
+    if (ri !== rj) parent[ri] = rj;
+  }
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (shopeeOrderItemsDuplicateShape(items[i], items[j])) union(i, j);
+    }
+  }
+  const byRoot = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    if (!byRoot.has(r)) byRoot.set(r, []);
+    byRoot.get(r)!.push(i);
+  }
+  return [...byRoot.values()];
+}
+
+function dedupeShopeeImportRows(rows: StandardizedShopeeItem[]): StandardizedShopeeItem[] {
+  const byOrder = new Map<string, StandardizedShopeeItem[]>();
+  for (const r of rows) {
+    if (!byOrder.has(r.orderId)) byOrder.set(r.orderId, []);
+    byOrder.get(r.orderId)!.push(r);
+  }
+  const out: StandardizedShopeeItem[] = [];
+  for (const [, list] of byOrder) {
+    const groups = clusterShopeeDuplicateIndices(list);
+    for (const g of groups) {
+      if (g.length === 1) {
+        out.push(list[g[0]]);
+      } else {
+        const cluster = g.map((i) => list[i]);
+        const withVar = cluster.filter((r) => String(r.variationName || '').trim());
+        const pool = withVar.length > 0 ? withVar : cluster;
+        const pick = pool.slice().sort((x, y) => {
+          const ln = y.name.length - x.name.length;
+          if (ln !== 0) return ln;
+          return String(y.productCode).length - String(x.productCode).length;
+        })[0];
+        out.push(pick);
+      }
+    }
+  }
+  return out;
+}
+
 interface StandardizedTiktokItem {
   orderId: string;
   orderDate: Date;
@@ -289,6 +450,28 @@ function monthStartFromYYYYMM(v: string): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+/** Mesmo filtro de pedidos usado em GET /api/simulation (mês + canal + status). */
+function buildSimulationOrderWhere(monthStart: Date, channelRaw: string): any {
+  const channel = String(channelRaw || 'all').trim().toLowerCase();
+  const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
+  const orderWhere: any = {
+    orderDate: { gte: monthStart, lt: monthEnd },
+    NOT: [
+      { status: { contains: 'ancelado', mode: 'insensitive' } },
+      { status: { contains: 'Não pago', mode: 'insensitive' } },
+      { status: 'Devolvido' },
+    ],
+  };
+  if (channel !== 'all') {
+    if (channel === 'tray') {
+      orderWhere.source = { in: [...TRAY_ORDER_SOURCES_LIST] };
+    } else {
+      orderWhere.source = channel;
+    }
+  }
+  return orderWhere;
+}
+
 const standardizeData = (row: Record<string, unknown>, source: string): StandardizedSale | null => {
   try {
     if (source === 'shopee') {
@@ -335,7 +518,7 @@ const standardizeData = (row: Record<string, unknown>, source: string): Standard
       };
     }
 
-    if (source === 'tray') {
+    if (isTrayUploadSource(source)) {
       // CSV template: "Pedido";"Data";"Hora";"Frete valor"; ... ;"Status pedido"; ... ;"Total"; ...
       const orderIdVal = pick(row, ['Pedido', 'pedido', 'Order ID']);
       const orderDateVal = pick(row, ['Data', 'data']);
@@ -355,10 +538,19 @@ const standardizeData = (row: Record<string, unknown>, source: string): Standard
 
       if (!orderId || !orderDate || isNaN(orderDate.getTime())) return null;
 
+      const srcLower = String(source).trim().toLowerCase();
+      const traySource =
+        srcLower === TRAY_SOURCE_ATACADO || srcLower === TRAY_SOURCE_VAREJO
+          ? srcLower
+          : resolveTraySubSource(row, orderId);
       const productName =
         channelVal && String(channelVal).trim()
           ? `Pedido (${String(channelVal).trim()})`
-          : 'Pedido (Tray)';
+          : traySource === TRAY_SOURCE_ATACADO
+            ? 'Pedido (Tray Atacado)'
+            : traySource === TRAY_SOURCE_VAREJO
+              ? 'Pedido (Tray Varejo)'
+              : 'Pedido (Tray)';
 
       return {
         orderId,
@@ -367,7 +559,7 @@ const standardizeData = (row: Record<string, unknown>, source: string): Standard
         quantity: 1,
         totalPrice,
         status,
-        source: 'tray',
+        source: traySource,
         freight,
         paymentType,
       };
@@ -380,7 +572,7 @@ const standardizeData = (row: Record<string, unknown>, source: string): Standard
   }
 };
 
-const standardizeTrayItem = (row: Record<string, unknown>): StandardizedOrderItem | null => {
+const standardizeTrayItem = (row: Record<string, unknown>, uploadTraySource: string): StandardizedOrderItem | null => {
   try {
     // CSV: "Código pedido";"Nome produto";"Preço venda";"Quantidade";"Código produto"
     
@@ -404,9 +596,13 @@ const standardizeTrayItem = (row: Record<string, unknown>): StandardizedOrderIte
     if (!orderId || !productCode || !name) return null;
     if (quantity <= 0) return null;
 
+    const us = String(uploadTraySource || 'tray').trim().toLowerCase();
+    const traySource =
+      us === TRAY_SOURCE_ATACADO || us === TRAY_SOURCE_VAREJO ? us : resolveTraySubSource(row, orderId);
+
     return {
       orderId,
-      source: 'tray',
+      source: traySource,
       productCode,
       name,
       unitPrice,
@@ -555,9 +751,12 @@ async function main() {
         if (!filepath) return res.status(400).json({ message: 'Caminho do arquivo não encontrado.' });
 
         const sourceRaw = (fields as any).source;
-        const source = first(sourceRaw) as string | undefined;
+        const source = String(first(sourceRaw) ?? '')
+          .trim()
+          .toLowerCase() as string;
 
-        if (!source || (source !== 'shopee' && source !== 'tiktok' && source !== 'tray')) {
+        const allowedUpload = ['shopee', 'tiktok', 'tray', TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO];
+        if (!source || !allowedUpload.includes(source)) {
           return res.status(400).json({ message: 'Source inválido.' });
         }
 
@@ -565,7 +764,7 @@ async function main() {
         // CSV: Tray usa ';', TikTok/Shopee usam ','
         const workbook =
           ext === '.csv'
-            ? xlsx.readFile(filepath, { FS: source === 'tray' ? ';' : ',', raw: true })
+            ? xlsx.readFile(filepath, { FS: isTrayUploadSource(source) ? ';' : ',', raw: true })
             : xlsx.readFile(filepath);
         const sheetName = workbook.SheetNames[0];
         const jsonData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
@@ -574,9 +773,11 @@ async function main() {
         }) as Record<string, unknown>[];
 
         if (source === 'shopee') {
-          const rows = jsonData
+          const rowsRaw = jsonData
             .map((row) => standardizeShopeeRow(row))
             .filter((r): r is StandardizedShopeeItem => r !== null);
+          // Planilha Shopee costuma trazer linha "pai" (só nome do produto) + linha da variação — mesma venda, mesmo preço.
+          const rows = dedupeShopeeImportRows(rowsRaw);
 
           const byOrder = new Map<string, {
             orderDate: Date;
@@ -782,6 +983,32 @@ async function main() {
           .map((row) => standardizeData(row, source))
           .filter((sale): sale is StandardizedSale => sale !== null);
 
+        // Mesmo número de pedido em `tray` (legado) + em tray_atacado/tray_varejo contava duas vezes nos KPIs.
+        // Ao importar com subcanal explícito ou automático que grava atacado/varejo, remove o legado equivalente.
+        const splitTrayOrderIds = [
+          ...new Set(
+            standardizedSales
+              .filter((s) => s.source === TRAY_SOURCE_ATACADO || s.source === TRAY_SOURCE_VAREJO)
+              .map((s) => s.orderId)
+          ),
+        ];
+        if (splitTrayOrderIds.length > 0) {
+          const CHUNK = 500;
+          let removed = 0;
+          for (let i = 0; i < splitTrayOrderIds.length; i += CHUNK) {
+            const chunk = splitTrayOrderIds.slice(i, i + CHUNK);
+            const r = await prisma.order.deleteMany({
+              where: { source: 'tray', orderId: { in: chunk } },
+            });
+            removed += r.count;
+          }
+          if (removed > 0) {
+            console.log(
+              `[tray] Removidos ${removed} pedido(s) com source=tray legado (mesmo código já existe como atacado/varejo neste arquivo).`
+            );
+          }
+        }
+
         const operations = standardizedSales.map((sale) => {
           const data: any = {
             orderId: sale.orderId,
@@ -792,7 +1019,7 @@ async function main() {
             totalPrice: sale.totalPrice,
             status: sale.status,
           };
-          if (sale.source === 'tray') {
+          if (isTrayOrderSource(sale.source)) {
             if (sale.freight != null) data.freight = sale.freight;
             if (sale.paymentType != null) data.paymentType = sale.paymentType;
           }
@@ -839,7 +1066,10 @@ async function main() {
 
         const sourceRaw = (fields as any).source;
         const source = String(first(sourceRaw) ?? '').trim().toLowerCase();
-        if (source !== 'tray') return res.status(400).json({ message: 'Source inválido (use tray).' });
+        const allowedItems = ['tray', TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO];
+        if (!allowedItems.includes(source)) {
+          return res.status(400).json({ message: 'Source inválido (use tray, tray_atacado ou tray_varejo).' });
+        }
 
         const ext = String(path.extname(filepath || '')).toLowerCase();
         const workbook =
@@ -854,7 +1084,7 @@ async function main() {
         }) as Record<string, unknown>[];
 
         const items = jsonData
-          .map((row) => standardizeTrayItem(row))
+          .map((row) => standardizeTrayItem(row, source))
           .filter((it): it is StandardizedOrderItem => it !== null);
 
         // Agrupar por pedido para atualizar metadados no Order (sem alterar totalPrice,
@@ -883,7 +1113,7 @@ async function main() {
           const productId = productIds.get(`tray_${it.productCode}`);
           ops.push(
             (prisma as any).orderItem.upsert({
-              where: { orderId_source_productCode: { orderId: it.orderId, source: 'tray', productCode: it.productCode } },
+              where: { orderId_source_productCode: { orderId: it.orderId, source: it.source, productCode: it.productCode } },
               update: {
                 name: it.name,
                 unitPrice: it.unitPrice,
@@ -897,16 +1127,25 @@ async function main() {
         }
 
         // Atualiza o Order somando itens (se o pedido existir)
+        const orderIdToSources = new Map<string, Set<string>>();
+        for (const it of items) {
+          if (!orderIdToSources.has(it.orderId)) orderIdToSources.set(it.orderId, new Set());
+          orderIdToSources.get(it.orderId)!.add(it.source);
+        }
         for (const [orderId, agg] of byOrder.entries()) {
-          ops.push(
-            prisma.order.updateMany({
-              where: { orderId, source: 'tray' },
-              data: {
-                quantity: agg.qty,
-                productName: agg.firstName,
-              },
-            })
-          );
+          const sources = orderIdToSources.get(orderId);
+          const list = sources ? [...sources] : [resolveTraySubSource(null, orderId)];
+          for (const src of list) {
+            ops.push(
+              prisma.order.updateMany({
+                where: { orderId, source: src },
+                data: {
+                  quantity: agg.qty,
+                  productName: agg.firstName,
+                },
+              })
+            );
+          }
         }
 
         const results = await prisma.$transaction(ops);
@@ -1098,6 +1337,29 @@ async function main() {
     }
   });
 
+  // Limpeza total da tabela AdSpend (registros inconsistentes). Senha em ADS_DELETE_ALL_PASSWORD ou padrão interno.
+  app.post('/api/adspend/delete-all', async (req, res) => {
+    try {
+      const expected = String(process.env.ADS_DELETE_ALL_PASSWORD ?? 'Wmdang12!@');
+      const pwd = String((req.body as { password?: string })?.password ?? '');
+      if (!pwd || pwd !== expected) {
+        return res.status(403).json({ message: 'Senha incorreta.' });
+      }
+      const prismaAny = prisma as any;
+      if (!prismaAny.adSpend) {
+        return res.status(500).json({ message: 'Model AdSpend não disponível.' });
+      }
+      const result = await prismaAny.adSpend.deleteMany({});
+      return res.status(200).json({
+        message: 'Todos os registros de ADS foram removidos.',
+        deleted: result.count,
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao remover todos os gastos de ADS.' });
+    }
+  });
+
   // Taxas por tipo de pagamento (Tray)
   // GET /api/payment-type-fees?month=2026-01&channel=tray
   app.get('/api/payment-type-fees', async (req, res) => {
@@ -1124,6 +1386,10 @@ async function main() {
     try {
       const { month: monthStr, channel, paymentType, percent } = req.body ?? {};
       const ch = String(channel ?? 'tray').trim().toLowerCase();
+      const allowedFeeChannels = ['tray', TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO];
+      if (!allowedFeeChannels.includes(ch)) {
+        return res.status(400).json({ message: `channel inválido. Use: ${allowedFeeChannels.join(', ')}.` });
+      }
       const pt = String(paymentType ?? '').trim();
       const pct = parseBrNumber(percent ?? 0);
       const month = monthStartFromYYYYMM(String(monthStr ?? ''));
@@ -1171,7 +1437,7 @@ async function main() {
   app.get('/api/payment-types', async (_req, res) => {
     try {
       const rows = await prisma.order.findMany({
-        where: { source: 'tray' },
+        where: { source: { in: [...TRAY_ORDER_SOURCES_LIST] } },
       });
       const seen = new Set<string>();
       for (const r of rows) {
@@ -1857,7 +2123,7 @@ async function main() {
   });
 
   // Simulação P&L por mês e canal
-  // GET /api/simulation?month=2026-01&channel=shopee|tiktok|tray|all
+  // GET /api/simulation?month=2026-01&channel=shopee|tiktok|tray|tray_atacado|tray_varejo|all
   app.get('/api/simulation', async (req, res) => {
     try {
       const monthStr = String(req.query.month ?? '').trim();
@@ -1868,15 +2134,7 @@ async function main() {
       if (!monthStart) return res.status(400).json({ message: 'Parâmetro month inválido (use YYYY-MM).' });
 
       const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
-      const orderWhere: any = {
-        orderDate: { gte: monthStart, lt: monthEnd },
-        NOT: [
-          { status: { contains: 'ancelado', mode: 'insensitive' } },
-          { status: { contains: 'Não pago', mode: 'insensitive' } },
-          { status: 'Devolvido' },
-        ],
-      };
-      if (channel !== 'all') orderWhere.source = channel;
+      const orderWhere = buildSimulationOrderWhere(monthStart, channel);
 
       const orders = await prisma.order.findMany({
         where: orderWhere,
@@ -1885,36 +2143,55 @@ async function main() {
 
       const totalRevenue = orders.reduce((s, o) => s + (o.totalPrice || 0), 0);
 
-      const shopeeFees = channel === 'tray' || channel === 'tiktok' ? 0 : orders
+      const isTrayChannelFilter =
+        channel === 'tray' || channel === TRAY_SOURCE_ATACADO || channel === TRAY_SOURCE_VAREJO;
+
+      const shopeeFees = isTrayChannelFilter || channel === 'tiktok' ? 0 : orders
         .filter((o) => o.source === 'shopee')
         .reduce((s, o) => s + (o.commissionFee || 0) + (o.serviceFee || 0), 0);
 
-      const tiktokFees = channel === 'tray' || channel === 'shopee' ? 0 : orders
+      const tiktokFees = isTrayChannelFilter || channel === 'shopee' ? 0 : orders
         .filter((o) => o.source === 'tiktok')
         .reduce((s, o) => s + (o.commissionFee || 0) + (o.serviceFee || 0), 0);
 
-      const trayOrders = orders.filter((o) => o.source === 'tray');
-      const trayRevenue = channel === 'tray' ? totalRevenue : (channel === 'all' ? trayOrders.reduce((s, o) => s + (o.totalPrice || 0), 0) : 0);
+      const trayOrders = orders.filter((o) => isTrayOrderSource(o.source));
+
+      const feePercentFor = (feeByCh: Map<string, Map<string, number>>, ch: string, pt: string): number => {
+        const trimmed = String(pt || '').trim();
+        return (
+          feeByCh.get(ch)?.get(trimmed) ??
+          feeByCh.get('tray')?.get(trimmed) ??
+          0
+        );
+      };
+
       let cardPix = 0;
-      if (channel === 'tray' || channel === 'all') {
-        const prismaAny = prisma as any;
-        const feeRows = await prismaAny.paymentTypeFee.findMany({
-          where: { month: monthStart, channel: 'tray' },
+      const prismaAnySim = prisma as any;
+      if (isTrayChannelFilter || channel === 'all') {
+        const feeRows = await prismaAnySim.paymentTypeFee.findMany({
+          where: {
+            month: monthStart,
+            channel: { in: ['tray', TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO] },
+          },
         });
-        const feeMap = new Map<string, number>();
-        for (const r of feeRows) feeMap.set(String(r.paymentType || '').trim(), Number(r.percent || 0));
+        const feeByCh = new Map<string, Map<string, number>>();
+        for (const r of feeRows) {
+          const ch = String(r.channel || '').trim().toLowerCase();
+          if (!feeByCh.has(ch)) feeByCh.set(ch, new Map());
+          feeByCh.get(ch)!.set(String(r.paymentType || '').trim(), Number(r.percent || 0));
+        }
         for (const o of trayOrders) {
           const pt = String((o as any).paymentType || '').trim();
-          const pct = feeMap.get(pt) ?? 0;
+          const feeCh = feeChannelForTrayOrder(o.source, o.orderId);
+          const pct = feePercentFor(feeByCh, feeCh, pt);
           cardPix += (o.totalPrice || 0) * (pct / 100);
         }
       }
 
-      const freight = (channel === 'tray' || channel === 'all')
-        ? orders
-            .filter((o) => o.source === 'tray')
-            .reduce((s, o) => s + ((o as any).freight || 0), 0)
-        : 0;
+      const freight =
+        isTrayChannelFilter || channel === 'all'
+          ? orders.filter((o) => isTrayOrderSource(o.source)).reduce((s, o) => s + ((o as any).freight || 0), 0)
+          : 0;
 
       const productionCost = orders.reduce((s, o) => {
         for (const item of o.items) {
@@ -1924,12 +2201,18 @@ async function main() {
         return s;
       }, 0);
 
-      const prismaAny = prisma as any;
-      const adSpendRows = await prismaAny.adSpend.findMany({
-        where: {
-          month: { gte: monthStart, lt: monthEnd },
-          ...(channel !== 'all' ? { channel } : {}),
-        },
+      const adSpendWhere: any = {
+        month: { gte: monthStart, lt: monthEnd },
+      };
+      if (channel !== 'all') {
+        if (channel === 'tray') {
+          adSpendWhere.channel = { in: ['tray', TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO] };
+        } else {
+          adSpendWhere.channel = channel;
+        }
+      }
+      const adSpendRows = await prismaAnySim.adSpend.findMany({
+        where: adSpendWhere,
       });
       const adsSpend = adSpendRows.reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
 
@@ -1992,6 +2275,142 @@ async function main() {
     }
   });
 
+  // Detalhe do custo de produção da simulação (agregado por produto / linha)
+  // GET /api/simulation/production-cost?month=2026-01&channel=all
+  app.get('/api/simulation/production-cost', async (req, res) => {
+    try {
+      const monthStr = String(req.query.month ?? '').trim();
+      const channel = String(req.query.channel ?? 'all').trim().toLowerCase();
+      const monthStart = monthStartFromYYYYMM(monthStr);
+      if (!monthStart) return res.status(400).json({ message: 'Parâmetro month inválido (use YYYY-MM).' });
+
+      const orderWhere = buildSimulationOrderWhere(monthStart, channel);
+      const orders = await prisma.order.findMany({
+        where: orderWhere,
+        include: { items: { include: { product: true } } },
+        orderBy: [{ orderDate: 'asc' }, { orderId: 'asc' }],
+      });
+
+      type LineAgg = {
+        productId: number | null;
+        productCode: string;
+        name: string;
+        quantity: number;
+        totalCost: number;
+      };
+      const map = new Map<string, LineAgg>();
+
+      for (const o of orders) {
+        for (const item of o.items) {
+          const qty = item.quantity || 0;
+          if (qty <= 0) continue;
+          const unitCost = Number(item.product?.costPrice ?? 0);
+          const lineCost = unitCost * qty;
+          const key =
+            item.productId != null
+              ? `pid:${item.productId}`
+              : `row:${String(item.productCode || '')}|${String(item.name || '')}`;
+          const cur = map.get(key);
+          if (cur) {
+            cur.quantity += qty;
+            cur.totalCost += lineCost;
+          } else {
+            map.set(key, {
+              productId: item.productId ?? null,
+              productCode: String(item.productCode || ''),
+              name: String(item.name || ''),
+              quantity: qty,
+              totalCost: lineCost,
+            });
+          }
+        }
+      }
+
+      const lines = [...map.values()]
+        .map((l) => {
+          const totalCost = Math.round(l.totalCost * 100) / 100;
+          const unitCost =
+            l.quantity > 0 ? Math.round((l.totalCost / l.quantity) * 10000) / 10000 : 0;
+          return {
+            productId: l.productId,
+            productCode: l.productCode,
+            name: l.name,
+            unitCost,
+            quantity: l.quantity,
+            totalCost,
+          };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+
+      const totalQuantity = lines.reduce((s, l) => s + l.quantity, 0);
+      const totalCostAll = Math.round(lines.reduce((s, l) => s + l.totalCost, 0) * 100) / 100;
+
+      return res.status(200).json({
+        month: monthStr,
+        channel,
+        lines,
+        totalQuantity,
+        totalCost: totalCostAll,
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao listar custo de produção.' });
+    }
+  });
+
+  // Detalhe do faturamento bruto da simulação (pedidos e itens)
+  // GET /api/simulation/gross-revenue?month=2026-01&channel=all
+  app.get('/api/simulation/gross-revenue', async (req, res) => {
+    try {
+      const monthStr = String(req.query.month ?? '').trim();
+      const channel = String(req.query.channel ?? 'all').trim().toLowerCase();
+      const monthStart = monthStartFromYYYYMM(monthStr);
+      if (!monthStart) return res.status(400).json({ message: 'Parâmetro month inválido (use YYYY-MM).' });
+
+      const orderWhere = buildSimulationOrderWhere(monthStart, channel);
+      const orders = await prisma.order.findMany({
+        where: orderWhere,
+        include: { items: true },
+        orderBy: [{ orderDate: 'desc' }, { orderId: 'desc' }],
+      });
+
+      let totalProductUnits = 0;
+      const list = orders.map((o) => {
+        const items = o.items.map((i) => ({
+          productCode: i.productCode,
+          name: i.name,
+          quantity: i.quantity || 0,
+          unitPrice: Math.round(Number(i.unitPrice || 0) * 100) / 100,
+          lineTotal: Math.round(Number(i.totalPrice || 0) * 100) / 100,
+        }));
+        const unitsInOrder = items.reduce((s, it) => s + it.quantity, 0);
+        totalProductUnits += unitsInOrder;
+        return {
+          orderId: o.orderId,
+          source: o.source,
+          orderDate: o.orderDate.toISOString(),
+          totalPrice: Math.round(Number(o.totalPrice || 0) * 100) / 100,
+          unitsInOrder,
+          items,
+        };
+      });
+
+      const faturamentoBruto = Math.round(list.reduce((s, o) => s + o.totalPrice, 0) * 100) / 100;
+
+      return res.status(200).json({
+        month: monthStr,
+        channel,
+        orders: list,
+        totalOrders: list.length,
+        totalProductUnits,
+        faturamentoBruto,
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao listar faturamento bruto.' });
+    }
+  });
+
   // Dashboard ADS (ROAS) baseado em Orders + AdSpend
   // GET /api/ads-dashboard?from=2026-01&to=2026-12
   app.get('/api/ads-dashboard', async (req, res) => {
@@ -2044,7 +2463,8 @@ async function main() {
       const spendByMonthTotal = new Map<string, number>(); // YYYY-MM
       for (const r of spendRows) {
         const d = new Date(r.month);
-        const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        // AdSpend.month é início do mês em UTC; getMonth() local (ex.: BR) empurrava gasto para o mês anterior.
+        const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
         const ch = String(r.channel || '').toLowerCase();
         const key = `${ym}|${ch}`;
         const amt = Number(r.amount || 0);
@@ -2119,10 +2539,20 @@ app.get('/api/dashboard', async (_req, res) => {
       ordersByChannel[source] = (ordersByChannel[source] || 0) + 1;
 
       if (!salesByMonth[monthYear]) {
-        salesByMonth[monthYear] = { 
-          name: monthYear, 
-          shopee: 0, tiktok: 0, tray: 0, total: 0, 
-          shopeeCount: 0, tiktokCount: 0, trayCount: 0, totalCount: 0 
+        salesByMonth[monthYear] = {
+          name: monthYear,
+          shopee: 0,
+          tiktok: 0,
+          trayAtacado: 0,
+          trayVarejo: 0,
+          trayLegacy: 0,
+          total: 0,
+          shopeeCount: 0,
+          tiktokCount: 0,
+          trayAtacadoCount: 0,
+          trayVarejoCount: 0,
+          trayLegacyCount: 0,
+          totalCount: 0,
         };
       }
       if (source === 'shopee') {
@@ -2133,17 +2563,26 @@ app.get('/api/dashboard', async (_req, res) => {
         salesByMonth[monthYear].tiktok += amount;
         salesByMonth[monthYear].tiktokCount += 1;
       }
-      if (source === 'tray') {
-        salesByMonth[monthYear].tray += amount;
-        salesByMonth[monthYear].trayCount += 1;
+      if (isTrayOrderSource(source)) {
+        const b = bucketTrayMetrics(source, sale.orderId);
+        if (b === 'trayAtacado') {
+          salesByMonth[monthYear].trayAtacado += amount;
+          salesByMonth[monthYear].trayAtacadoCount += 1;
+        } else if (b === 'trayVarejo') {
+          salesByMonth[monthYear].trayVarejo += amount;
+          salesByMonth[monthYear].trayVarejoCount += 1;
+        } else {
+          salesByMonth[monthYear].trayLegacy += amount;
+          salesByMonth[monthYear].trayLegacyCount += 1;
+        }
       }
       salesByMonth[monthYear].total += amount;
       salesByMonth[monthYear].totalCount += 1;
     });
 
-    const chartChannel = Object.keys(salesByChannel).map(key => ({
-      name: key.charAt(0).toUpperCase() + key.slice(1),
-      value: Number(salesByChannel[key].toFixed(2))
+    const chartChannel = Object.keys(salesByChannel).map((key) => ({
+      name: channelLabelForChart(key),
+      value: Number(salesByChannel[key].toFixed(2)),
     }));
     const chartMonthly = Object.values(salesByMonth);
 
@@ -2305,14 +2744,43 @@ app.get('/api/dashboard', async (_req, res) => {
             { status: 'Devolvido' },
           ],
         },
-        select: { orderDate: true, source: true, totalPrice: true },
+        select: { orderDate: true, source: true, totalPrice: true, orderId: true },
       });
 
-      const byDay: Record<string, { shopee: number; tiktok: number; tray: number; total: number; shopeeOrders: number; tiktokOrders: number; trayOrders: number; totalOrders: number }> = {};
+      type DayAgg = {
+        shopee: number;
+        tiktok: number;
+        trayAtacado: number;
+        trayVarejo: number;
+        trayLegacy: number;
+        total: number;
+        shopeeOrders: number;
+        tiktokOrders: number;
+        trayAtacadoOrders: number;
+        trayVarejoOrders: number;
+        trayLegacyOrders: number;
+        totalOrders: number;
+      };
+      const emptyDay = (): DayAgg => ({
+        shopee: 0,
+        tiktok: 0,
+        trayAtacado: 0,
+        trayVarejo: 0,
+        trayLegacy: 0,
+        total: 0,
+        shopeeOrders: 0,
+        tiktokOrders: 0,
+        trayAtacadoOrders: 0,
+        trayVarejoOrders: 0,
+        trayLegacyOrders: 0,
+        totalOrders: 0,
+      });
+
+      const byDay: Record<string, DayAgg> = {};
       const dayKeys: string[] = [];
       for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        byDay[key] = { shopee: 0, tiktok: 0, tray: 0, total: 0, shopeeOrders: 0, tiktokOrders: 0, trayOrders: 0, totalOrders: 0 };
+        byDay[key] = emptyDay();
         dayKeys.push(key);
       }
 
@@ -2320,7 +2788,7 @@ app.get('/api/dashboard', async (_req, res) => {
         const d = new Date(o.orderDate);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         if (!byDay[key]) {
-          byDay[key] = { shopee: 0, tiktok: 0, tray: 0, total: 0, shopeeOrders: 0, tiktokOrders: 0, trayOrders: 0, totalOrders: 0 };
+          byDay[key] = emptyDay();
           dayKeys.push(key);
           dayKeys.sort();
         }
@@ -2333,17 +2801,31 @@ app.get('/api/dashboard', async (_req, res) => {
         } else if (o.source === 'tiktok') {
           byDay[key].tiktok += amt;
           byDay[key].tiktokOrders += 1;
-        } else if (o.source === 'tray') {
-          byDay[key].tray += amt;
-          byDay[key].trayOrders += 1;
+        } else if (isTrayOrderSource(o.source)) {
+          const b = bucketTrayMetrics(o.source, o.orderId);
+          if (b === 'trayAtacado') {
+            byDay[key].trayAtacado += amt;
+            byDay[key].trayAtacadoOrders += 1;
+          } else if (b === 'trayVarejo') {
+            byDay[key].trayVarejo += amt;
+            byDay[key].trayVarejoOrders += 1;
+          } else {
+            byDay[key].trayLegacy += amt;
+            byDay[key].trayLegacyOrders += 1;
+          }
         }
       }
 
-      const rows = dayKeys.map((k) => ({
-        date: k,
-        name: new Date(k + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
-        ...byDay[k],
-      }));
+      const rows = dayKeys.map((k) => {
+        const b = byDay[k];
+        return {
+          date: k,
+          name: new Date(k + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+          ...b,
+          tray: b.trayAtacado + b.trayVarejo + b.trayLegacy,
+          trayOrders: b.trayAtacadoOrders + b.trayVarejoOrders + b.trayLegacyOrders,
+        };
+      });
 
       return res.status(200).json(rows);
     } catch (e) {
@@ -2751,6 +3233,107 @@ app.get('/api/dashboard', async (_req, res) => {
     } catch (e) {
       console.error(e);
       return res.status(500).json({ message: 'Erro ao desconectar.' });
+    }
+  });
+
+  // Itens Shopee duplicados no mesmo pedido (planilha pai + variação / códigos hierárquicos) — impacta custo e P&L
+  // GET /api/shopee/duplicate-order-items?month=2026-01&maxOrders=5000
+  app.get('/api/shopee/duplicate-order-items', async (req, res) => {
+    try {
+      const monthStr = String(req.query.month ?? '').trim();
+      const maxOrders = Math.min(
+        Math.max(parseInt(String(req.query.maxOrders ?? '4000'), 10) || 4000, 50),
+        20000,
+      );
+      const orderWhere: any = { source: 'shopee' };
+      if (monthStr) {
+        const monthStart = monthStartFromYYYYMM(monthStr);
+        if (!monthStart) return res.status(400).json({ message: 'Parâmetro month inválido (use YYYY-MM).' });
+        const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
+        orderWhere.orderDate = { gte: monthStart, lt: monthEnd };
+      }
+
+      const orders = await prisma.order.findMany({
+        where: orderWhere,
+        include: { items: { orderBy: { id: 'asc' } } },
+        orderBy: { orderDate: 'desc' },
+        take: maxOrders,
+      });
+
+      const groupsOut: any[] = [];
+      for (const o of orders) {
+        if (!o.items || o.items.length < 2) continue;
+        const idxGroups = clusterShopeeDuplicateIndices(o.items);
+        for (const g of idxGroups) {
+          if (g.length < 2) continue;
+          const cluster = g.map((i) => o.items[i]);
+          const linesSum = Math.round(cluster.reduce((s, it) => s + Number(it.totalPrice || 0), 0) * 100) / 100;
+          const withVar = cluster.filter((it) => String(it.name || '').includes(' - '));
+          const pool = withVar.length > 0 ? withVar : cluster;
+          const suggestedKeep = pool.slice().sort((a, b) => {
+            const ln = String(b.name).length - String(a.name).length;
+            if (ln !== 0) return ln;
+            return String(b.productCode).length - String(a.productCode).length;
+          })[0];
+          groupsOut.push({
+            orderId: o.orderId,
+            orderDate: o.orderDate.toISOString(),
+            orderTotal: Number(o.totalPrice || 0),
+            linesSum,
+            exceedsOrderTotal: linesSum > Number(o.totalPrice || 0) + SHOPEE_DUP_PRICE_EPS,
+            suggestedKeepItemId: suggestedKeep.id,
+            suggestedKeepProductCode: suggestedKeep.productCode,
+            items: cluster.map((it) => ({
+              id: it.id,
+              productCode: it.productCode,
+              name: it.name,
+              quantity: it.quantity,
+              unitPrice: it.unitPrice,
+              totalPrice: it.totalPrice,
+              productId: it.productId,
+              isSuggestedKeep: it.id === suggestedKeep.id,
+            })),
+          });
+        }
+      }
+
+      return res.status(200).json({
+        scannedOrders: orders.length,
+        duplicateGroups: groupsOut.length,
+        groups: groupsOut,
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao analisar duplicatas Shopee.' });
+    }
+  });
+
+  // Remove uma linha de item (uso: excluir duplicata Shopee após conferência)
+  app.delete('/api/order-items/:id', async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: 'id inválido.' });
+      const row = await prisma.orderItem.findUnique({ where: { id } });
+      if (!row || row.source !== 'shopee') {
+        return res.status(404).json({ message: 'Item não encontrado ou exclusão permitida apenas para Shopee.' });
+      }
+      const { orderId } = row;
+      await prisma.orderItem.delete({ where: { id } });
+      const remaining = await prisma.orderItem.findMany({
+        where: { orderId, source: 'shopee' },
+        orderBy: { id: 'asc' },
+      });
+      const qty = remaining.reduce((s, it) => s + (it.quantity || 0), 0);
+      const productName =
+        remaining.map((it) => it.name).join(' + ').slice(0, 500) || 'Produto Shopee';
+      await prisma.order.updateMany({
+        where: { orderId, source: 'shopee' },
+        data: { quantity: qty, productName },
+      });
+      return res.status(200).json({ ok: true, id });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao excluir item.' });
     }
   });
 

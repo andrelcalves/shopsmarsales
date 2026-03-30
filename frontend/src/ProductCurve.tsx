@@ -33,6 +33,8 @@ const CHANNEL_COLORS: Record<string, string> = {
   shopee: "bg-orange-600",
   tiktok: "bg-slate-800",
   tray: "bg-sky-600",
+  tray_atacado: "bg-sky-900",
+  tray_varejo: "bg-sky-500",
 };
 
 interface CurveRow {

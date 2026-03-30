@@ -32,11 +32,14 @@ export default function PaymentTypeFees() {
   const [paymentType, setPaymentType] = useState<string>("");
   const [customPaymentType, setCustomPaymentType] = useState<string>("");
   const [percent, setPercent] = useState<string>("");
+  const [feeChannel, setFeeChannel] = useState<string>("tray_atacado");
 
   async function fetchRows() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/payment-type-fees?month=${encodeURIComponent(month)}&channel=tray`);
+      const res = await fetch(
+        `${API_URL}/api/payment-type-fees?month=${encodeURIComponent(month)}&channel=${encodeURIComponent(feeChannel)}`
+      );
       const data = await res.json();
       setRows(Array.isArray(data) ? data : []);
     } catch (e) {
@@ -60,7 +63,7 @@ export default function PaymentTypeFees() {
 
   useEffect(() => {
     fetchRows();
-  }, [month]);
+  }, [month, feeChannel]);
 
   useEffect(() => {
     fetchPaymentTypes();
@@ -75,7 +78,7 @@ export default function PaymentTypeFees() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           month,
-          channel: "tray",
+          channel: feeChannel,
           paymentType: (customPaymentType || paymentType || "").trim() || undefined,
           percent,
         }),
@@ -96,7 +99,7 @@ export default function PaymentTypeFees() {
     setMessage("Removendo...");
     try {
       const res = await fetch(
-        `${API_URL}/api/payment-type-fees?month=${encodeURIComponent(m)}&channel=tray&paymentType=${encodeURIComponent(pt)}`,
+        `${API_URL}/api/payment-type-fees?month=${encodeURIComponent(m)}&channel=${encodeURIComponent(feeChannel)}&paymentType=${encodeURIComponent(pt)}`,
         { method: "DELETE" }
       );
       const data = await res.json();
@@ -115,11 +118,23 @@ export default function PaymentTypeFees() {
           <div>
             <h2 className="text-lg font-black tracking-tight text-slate-900">Taxas por tipo de pagamento (Tray)</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Cadastre o percentual de taxa por tipo de pagamento e mês. Usado na simulação P&L do canal Tray.
+              Cadastre taxas por loja (atacado / varejo) ou use &quot;tray&quot; legado como fallback na simulação.
             </p>
           </div>
 
           <form onSubmit={upsert} className="mt-5 grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+            <div className="md:col-span-3">
+              <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Loja Tray</label>
+              <select
+                value={feeChannel}
+                onChange={(e) => setFeeChannel(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
+              >
+                <option value="tray_atacado">Tray Atacado</option>
+                <option value="tray_varejo">Tray Varejo</option>
+                <option value="tray">Tray (legado / fallback)</option>
+              </select>
+            </div>
             <div className="md:col-span-3">
               <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Mês</label>
               <input
@@ -129,7 +144,7 @@ export default function PaymentTypeFees() {
                 className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
               />
             </div>
-            <div className="md:col-span-4">
+            <div className="md:col-span-3">
               <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Tipo de pagamento</label>
               <select
                 value={paymentType}
@@ -151,7 +166,7 @@ export default function PaymentTypeFees() {
                 className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-700 shadow-sm"
               />
             </div>
-            <div className="md:col-span-2">
+            <div className="md:col-span-1">
               <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Taxa (%)</label>
               <input
                 type="text"
@@ -161,7 +176,7 @@ export default function PaymentTypeFees() {
                 className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
               />
             </div>
-            <div className="md:col-span-3">
+            <div className="md:col-span-2">
               <button
                 type="submit"
                 className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-extrabold text-white shadow-sm hover:bg-slate-800 transition"
@@ -180,7 +195,10 @@ export default function PaymentTypeFees() {
 
         <div className={cn(UI.card, "overflow-hidden")}>
           <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
-            <h3 className="text-sm font-extrabold tracking-wide text-slate-900">Taxas cadastradas — {month}</h3>
+            <h3 className="text-sm font-extrabold tracking-wide text-slate-900">
+              Taxas cadastradas — {month} —{" "}
+              {feeChannel === "tray_atacado" ? "Atacado" : feeChannel === "tray_varejo" ? "Varejo" : "Legado"}
+            </h3>
           </div>
           <div className="p-6">
             {loading ? (

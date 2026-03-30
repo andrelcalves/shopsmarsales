@@ -55,13 +55,17 @@ interface ReturnRecord {
 const sourceLabel: Record<string, string> = {
   shopee: 'Shopee',
   tiktok: 'TikTok',
-  tray: 'Tray',
+  tray: 'Tray (legado)',
+  tray_atacado: 'Tray Atacado',
+  tray_varejo: 'Tray Varejo',
 };
 
 const sourceBadge: Record<string, string> = {
   shopee: 'bg-orange-100 text-orange-700',
   tiktok: 'bg-slate-100 text-slate-800',
   tray: 'bg-blue-100 text-blue-700',
+  tray_atacado: 'bg-sky-900 text-white',
+  tray_varejo: 'bg-sky-400 text-slate-900',
 };
 
 export default function Returns() {
