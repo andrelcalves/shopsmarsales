@@ -13,6 +13,7 @@ import SalesByDayDashboard from './SalesByDayDashboard';
 import BillsDashboard from './BillsDashboard';
 import Pricing from './Pricing';
 import ShopeeIntegration from './ShopeeIntegration';
+import ShopeeDuplicates from './ShopeeDuplicates';
 import ProductCurve from './ProductCurve';
 import Returns from './Returns';
 
@@ -38,15 +39,18 @@ interface Sale {
   source: string;
 }
 
+type OrderUploadSource = 'shopee' | 'tiktok' | 'tray' | 'tray_atacado' | 'tray_varejo';
+
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'product_curve' | 'returns'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'shopee_duplicates' | 'product_curve' | 'returns'>('upload');
 
   // --- LÓGICA DA TELA DE UPLOAD ---
   const [file, setFile] = useState<File | null>(null);
-  const [source, setSource] = useState<'shopee' | 'tiktok' | 'tray'>('shopee');
+  const [source, setSource] = useState<OrderUploadSource>('shopee');
   const [message, setMessage] = useState('');
   const [itemsFile, setItemsFile] = useState<File | null>(null);
+  const [itemsTraySource, setItemsTraySource] = useState<'tray' | 'tray_atacado' | 'tray_varejo'>('tray_atacado');
   const [itemsMessage, setItemsMessage] = useState('');
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
@@ -129,7 +133,7 @@ function App() {
     setItemsMessage('Enviando e processando produtos...');
     const formData = new FormData();
     formData.append('file', itemsFile);
-    formData.append('source', 'tray');
+    formData.append('source', itemsTraySource);
 
     try {
       const response = await fetch(`${API_URL}/api/upload-items`, {
@@ -180,15 +184,18 @@ function App() {
                                     ? 'Cadastro contas'
                                     : currentView === 'pricing'
                                       ? 'Precificação'
-                                      : currentView === 'shopee_integration'
-                                        ? 'Integrações'
-                                        : currentView === 'product_curve'
-                                          ? 'Curva ABC'
-                                          : currentView === 'returns'
-                                            ? 'Devoluções'
-                                            : 'Simulação'}
+                                      : currentView === 'simulation'
+                                        ? 'Simulação'
+                                        : currentView === 'shopee_integration'
+                                          ? 'Integrações'
+                                          : currentView === 'shopee_duplicates'
+                                            ? 'Duplicatas Shopee'
+                                            : currentView === 'product_curve'
+                                              ? 'Curva ABC'
+                                              : currentView === 'returns'
+                                                ? 'Devoluções'
+                                                : 'Consolidador'}
               </h1>
-              <p className="mt-1 text-white/80 text-sm">Shopee + TikTok + Tray • Importação e visualização</p>
             </div>
 
             {/* Dashboards */}
@@ -330,6 +337,15 @@ function App() {
                   Integrações
                 </button>
                 <button
+                  onClick={() => setCurrentView('shopee_duplicates')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'shopee_duplicates' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Dup. Shopee
+                </button>
+                <button
                   onClick={() => setCurrentView('returns')}
                   className={cn(
                     'px-4 py-2 rounded-xl text-sm font-extrabold transition',
@@ -369,6 +385,8 @@ function App() {
         <Simulation />
       ) : currentView === 'shopee_integration' ? (
         <ShopeeIntegration />
+      ) : currentView === 'shopee_duplicates' ? (
+        <ShopeeDuplicates />
       ) : currentView === 'product_curve' ? (
         <ProductCurve />
       ) : currentView === 'returns' ? (
@@ -392,12 +410,14 @@ function App() {
                 <select
                   id="source-select"
                   value={source}
-                  onChange={(e) => setSource(e.target.value as any)}
+                  onChange={(e) => setSource(e.target.value as OrderUploadSource)}
                   className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                 >
                   <option value="shopee">Shopee</option>
                   <option value="tiktok">TikTok Shop</option>
-                  <option value="tray">Site Tray</option>
+                  <option value="tray_atacado">Tray Atacado</option>
+                  <option value="tray_varejo">Tray Varejo</option>
+                  <option value="tray">Tray — detectar pelo arquivo (prefixo 5/2 ou loja)</option>
                 </select>
               </div>
 
@@ -439,12 +459,24 @@ function App() {
             <div>
               <h2 className="text-lg font-black tracking-tight text-slate-900">Importar produtos (Tray)</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Use o arquivo <span className="font-bold">produtos_vendidos_*.csv</span> para associar itens aos pedidos Tray.
+                Escolha a loja acima e use o arquivo <span className="font-bold">produtos_vendidos_*.csv</span>. Deve ser o mesmo subcanal dos pedidos já importados.
               </p>
             </div>
 
             <form onSubmit={handleItemsSubmit} className="mt-5 grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-              <div className="md:col-span-9">
+              <div className="md:col-span-3">
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Loja Tray</label>
+                <select
+                  value={itemsTraySource}
+                  onChange={(e) => setItemsTraySource(e.target.value as 'tray' | 'tray_atacado' | 'tray_varejo')}
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                >
+                  <option value="tray_atacado">Tray Atacado</option>
+                  <option value="tray_varejo">Tray Varejo</option>
+                  <option value="tray">Detectar pelo código do pedido</option>
+                </select>
+              </div>
+              <div className="md:col-span-6">
                 <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Arquivo de produtos</label>
                 <input
                   type="file"
@@ -453,7 +485,7 @@ function App() {
                   className="mt-2 block w-full text-sm text-slate-700 file:mr-4 file:rounded-xl file:border-0 file:bg-slate-100 file:px-4 file:py-2 file:text-sm file:font-extrabold file:text-slate-900 hover:file:bg-slate-200"
                 />
               </div>
-              <div className="md:col-span-3">
+              <div className="md:col-span-3 flex items-end">
                 <button
                   type="submit"
                   disabled={!itemsFile}

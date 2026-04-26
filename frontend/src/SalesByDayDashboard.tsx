@@ -19,10 +19,16 @@ type DayRow = {
   name: string;
   shopee: number;
   tiktok: number;
+  trayAtacado: number;
+  trayVarejo: number;
+  trayLegacy: number;
   tray: number;
   total: number;
   shopeeOrders: number;
   tiktokOrders: number;
+  trayAtacadoOrders: number;
+  trayVarejoOrders: number;
+  trayLegacyOrders: number;
   trayOrders: number;
   totalOrders: number;
 };
@@ -33,14 +39,41 @@ type MergedRow = DayRow & {
   prevTotal?: number;
   prevShopee?: number;
   prevTiktok?: number;
+  prevTrayAtacado?: number;
+  prevTrayVarejo?: number;
+  prevTrayLegacy?: number;
   prevTray?: number;
   prevTotalOrders?: number;
 };
 
+function normalizeDayRow(r: Record<string, unknown>): DayRow {
+  const n = (k: string) => Number(r[k] ?? 0);
+  return {
+    date: String(r.date ?? ""),
+    name: String(r.name ?? ""),
+    shopee: n("shopee"),
+    tiktok: n("tiktok"),
+    trayAtacado: n("trayAtacado"),
+    trayVarejo: n("trayVarejo"),
+    trayLegacy: n("trayLegacy"),
+    tray: n("tray"),
+    total: n("total"),
+    shopeeOrders: n("shopeeOrders"),
+    tiktokOrders: n("tiktokOrders"),
+    trayAtacadoOrders: n("trayAtacadoOrders"),
+    trayVarejoOrders: n("trayVarejoOrders"),
+    trayLegacyOrders: n("trayLegacyOrders"),
+    trayOrders: n("trayOrders"),
+    totalOrders: n("totalOrders"),
+  };
+}
+
 const CHANNEL_COLORS: Record<string, string> = {
   shopee: "#FF6B35",
   tiktok: "#1F2937",
-  tray: "#0EA5E9",
+  trayAtacado: "#0369A1",
+  trayVarejo: "#38BDF8",
+  trayLegacy: "#94A3B8",
 };
 
 const PREV_MONTH_COLOR = "#A855F7";
@@ -107,10 +140,10 @@ export default function SalesByDayDashboard() {
         compare ? fetch(`${API_URL}/api/sales-by-day?month=${encodeURIComponent(prevMonth)}`) : Promise.resolve(null),
       ]);
       const data = await res.json();
-      setRows(Array.isArray(data) ? data : []);
+      setRows(Array.isArray(data) ? data.map((x: Record<string, unknown>) => normalizeDayRow(x)) : []);
       if (prevRes) {
         const prevData = await prevRes.json();
-        setPrevRows(Array.isArray(prevData) ? prevData : []);
+        setPrevRows(Array.isArray(prevData) ? prevData.map((x: Record<string, unknown>) => normalizeDayRow(x)) : []);
       } else {
         setPrevRows([]);
       }
@@ -144,6 +177,9 @@ export default function SalesByDayDashboard() {
         prevTotal: prev?.total,
         prevShopee: prev?.shopee,
         prevTiktok: prev?.tiktok,
+        prevTrayAtacado: prev?.trayAtacado,
+        prevTrayVarejo: prev?.trayVarejo,
+        prevTrayLegacy: prev?.trayLegacy,
         prevTray: prev?.tray,
         prevTotalOrders: prev?.totalOrders,
       };
@@ -154,28 +190,70 @@ export default function SalesByDayDashboard() {
     (acc, r) => ({
       shopee: acc.shopee + r.shopee,
       tiktok: acc.tiktok + r.tiktok,
+      trayAtacado: acc.trayAtacado + r.trayAtacado,
+      trayVarejo: acc.trayVarejo + r.trayVarejo,
+      trayLegacy: acc.trayLegacy + r.trayLegacy,
       tray: acc.tray + r.tray,
       total: acc.total + r.total,
       shopeeOrders: acc.shopeeOrders + (r.shopeeOrders ?? 0),
       tiktokOrders: acc.tiktokOrders + (r.tiktokOrders ?? 0),
+      trayAtacadoOrders: acc.trayAtacadoOrders + (r.trayAtacadoOrders ?? 0),
+      trayVarejoOrders: acc.trayVarejoOrders + (r.trayVarejoOrders ?? 0),
+      trayLegacyOrders: acc.trayLegacyOrders + (r.trayLegacyOrders ?? 0),
       trayOrders: acc.trayOrders + (r.trayOrders ?? 0),
       totalOrders: acc.totalOrders + (r.totalOrders ?? 0),
     }),
-    { shopee: 0, tiktok: 0, tray: 0, total: 0, shopeeOrders: 0, tiktokOrders: 0, trayOrders: 0, totalOrders: 0 }
+    {
+      shopee: 0,
+      tiktok: 0,
+      trayAtacado: 0,
+      trayVarejo: 0,
+      trayLegacy: 0,
+      tray: 0,
+      total: 0,
+      shopeeOrders: 0,
+      tiktokOrders: 0,
+      trayAtacadoOrders: 0,
+      trayVarejoOrders: 0,
+      trayLegacyOrders: 0,
+      trayOrders: 0,
+      totalOrders: 0,
+    }
   );
 
   const prevTotals = prevRows.reduce(
     (acc, r) => ({
       shopee: acc.shopee + r.shopee,
       tiktok: acc.tiktok + r.tiktok,
+      trayAtacado: acc.trayAtacado + r.trayAtacado,
+      trayVarejo: acc.trayVarejo + r.trayVarejo,
+      trayLegacy: acc.trayLegacy + r.trayLegacy,
       tray: acc.tray + r.tray,
       total: acc.total + r.total,
       shopeeOrders: acc.shopeeOrders + (r.shopeeOrders ?? 0),
       tiktokOrders: acc.tiktokOrders + (r.tiktokOrders ?? 0),
+      trayAtacadoOrders: acc.trayAtacadoOrders + (r.trayAtacadoOrders ?? 0),
+      trayVarejoOrders: acc.trayVarejoOrders + (r.trayVarejoOrders ?? 0),
+      trayLegacyOrders: acc.trayLegacyOrders + (r.trayLegacyOrders ?? 0),
       trayOrders: acc.trayOrders + (r.trayOrders ?? 0),
       totalOrders: acc.totalOrders + (r.totalOrders ?? 0),
     }),
-    { shopee: 0, tiktok: 0, tray: 0, total: 0, shopeeOrders: 0, tiktokOrders: 0, trayOrders: 0, totalOrders: 0 }
+    {
+      shopee: 0,
+      tiktok: 0,
+      trayAtacado: 0,
+      trayVarejo: 0,
+      trayLegacy: 0,
+      tray: 0,
+      total: 0,
+      shopeeOrders: 0,
+      tiktokOrders: 0,
+      trayAtacadoOrders: 0,
+      trayVarejoOrders: 0,
+      trayLegacyOrders: 0,
+      trayOrders: 0,
+      totalOrders: 0,
+    }
   );
 
   const chartData = compare ? mergedRows : rows;
@@ -235,7 +313,7 @@ export default function SalesByDayDashboard() {
                 <span className="text-sm font-semibold tracking-wide">VENDAS POR DIA</span>
               </div>
               <h1 className="mt-2 text-3xl md:text-4xl font-black tracking-tight">Vendas diárias por canal</h1>
-              <p className="mt-1 text-white/80 text-sm">Shopee + TikTok + Tray • Filtro por mês</p>
+              <p className="mt-1 text-white/80 text-sm">Shopee + TikTok + Tray (atacado / varejo) • Filtro por mês</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
@@ -270,12 +348,14 @@ export default function SalesByDayDashboard() {
             </div>
           </div>
 
-          <div className="mt-5 grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="mt-5 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             {[
               { label: "Total", value: totals.total, orders: totals.totalOrders, prev: prevTotals.total },
               { label: "Shopee", value: totals.shopee, orders: totals.shopeeOrders, prev: prevTotals.shopee },
               { label: "TikTok", value: totals.tiktok, orders: totals.tiktokOrders, prev: prevTotals.tiktok },
-              { label: "Tray", value: totals.tray, orders: totals.trayOrders, prev: prevTotals.tray },
+              { label: "Tray Atacado", value: totals.trayAtacado, orders: totals.trayAtacadoOrders, prev: prevTotals.trayAtacado },
+              { label: "Tray Varejo", value: totals.trayVarejo, orders: totals.trayVarejoOrders, prev: prevTotals.trayVarejo },
+              { label: "Tray legado", value: totals.trayLegacy, orders: totals.trayLegacyOrders, prev: prevTotals.trayLegacy },
             ].map((card) => {
               const delta = compare ? formatDelta(card.value, card.prev) : null;
               return (
@@ -352,7 +432,9 @@ export default function SalesByDayDashboard() {
                         const items: { label: string; color: string; type: "square" | "line"; dash?: boolean }[] = [
                           { label: "Shopee", color: CHANNEL_COLORS.shopee, type: "square" },
                           { label: "TikTok", color: CHANNEL_COLORS.tiktok, type: "square" },
-                          { label: "Tray", color: CHANNEL_COLORS.tray, type: "square" },
+                          { label: "Tray Atac.", color: CHANNEL_COLORS.trayAtacado, type: "square" },
+                          { label: "Tray Var.", color: CHANNEL_COLORS.trayVarejo, type: "square" },
+                          { label: "Tray leg.", color: CHANNEL_COLORS.trayLegacy, type: "square" },
                         ];
                         if (compare) {
                           items.push({ label: `Total ${getMonthLabel(month)}`, color: "#10B981", type: "line" });
@@ -376,7 +458,9 @@ export default function SalesByDayDashboard() {
                     />
                     <Bar dataKey="shopee" name="Shopee" stackId="a" fill={CHANNEL_COLORS.shopee} radius={[0, 0, 0, 0]} />
                     <Bar dataKey="tiktok" name="TikTok" stackId="a" fill={CHANNEL_COLORS.tiktok} radius={[0, 0, 0, 0]} />
-                    <Bar dataKey="tray" name="Tray" stackId="a" fill={CHANNEL_COLORS.tray} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="trayAtacado" name="Tray Atacado" stackId="a" fill={CHANNEL_COLORS.trayAtacado} radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="trayVarejo" name="Tray Varejo" stackId="a" fill={CHANNEL_COLORS.trayVarejo} radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="trayLegacy" name="Tray legado" stackId="a" fill={CHANNEL_COLORS.trayLegacy} radius={[4, 4, 0, 0]} />
                     <Line
                       dataKey="total"
                       name={`Total ${getMonthLabel(month)}`}
@@ -425,7 +509,9 @@ export default function SalesByDayDashboard() {
                       <th className="px-4 py-3">Dia</th>
                       <th className="px-4 py-3 text-right">Shopee</th>
                       <th className="px-4 py-3 text-right">TikTok</th>
-                      <th className="px-4 py-3 text-right">Tray</th>
+                      <th className="px-4 py-3 text-right">Tray Atac.</th>
+                      <th className="px-4 py-3 text-right">Tray Var.</th>
+                      <th className="px-4 py-3 text-right">Tray leg.</th>
                       <th className="px-4 py-3 text-right">Total</th>
                       {compare && (
                         <>
@@ -450,8 +536,16 @@ export default function SalesByDayDashboard() {
                             <span className="text-xs text-slate-500">{r.tiktokOrders ?? 0} pedidos</span>
                           </td>
                           <td className="px-4 py-3 text-right text-slate-700">
-                            <span className="block">{formatMoney(r.tray)}</span>
-                            <span className="text-xs text-slate-500">{r.trayOrders ?? 0} pedidos</span>
+                            <span className="block">{formatMoney(r.trayAtacado)}</span>
+                            <span className="text-xs text-slate-500">{r.trayAtacadoOrders ?? 0} pedidos</span>
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-700">
+                            <span className="block">{formatMoney(r.trayVarejo)}</span>
+                            <span className="text-xs text-slate-500">{r.trayVarejoOrders ?? 0} pedidos</span>
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-700">
+                            <span className="block">{formatMoney(r.trayLegacy)}</span>
+                            <span className="text-xs text-slate-500">{r.trayLegacyOrders ?? 0} pedidos</span>
                           </td>
                           <td className="px-4 py-3 text-right font-bold text-slate-900">
                             <span className="block">{formatMoney(r.total)}</span>

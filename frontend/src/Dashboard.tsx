@@ -42,7 +42,9 @@ interface DashboardData {
     name: string;
     shopee: number;
     tiktok: number;
-    tray: number;
+    trayAtacado: number;
+    trayVarejo: number;
+    trayLegacy: number;
     total: number;
     totalCount: number;
   }[];
@@ -50,7 +52,7 @@ interface DashboardData {
 }
 
 type RangeKey = "7d" | "30d" | "90d";
-type BarMode = "total" | "shopee" | "tiktok" | "tray";
+type BarMode = "total" | "shopee" | "tiktok" | "trayAtacado" | "trayVarejo" | "trayLegacy";
 
 const ranges: { key: RangeKey; label: string }[] = [
   { key: "7d", label: "7 dias" },
@@ -62,8 +64,11 @@ const CHANNEL_COLORS: Record<string, string> = {
   shopee: "#FF6B35",
   tiktok: "#1F2937",
   tray: "#0EA5E9",
+  trayAtacado: "#0369A1",
+  trayVarejo: "#38BDF8",
+  trayLegacy: "#94A3B8",
 };
-const PIE_COLORS = ["#FF6B35", "#1F2937", "#0EA5E9", "#10B981"];
+const PIE_COLORS = ["#FF6B35", "#1F2937", "#0369A1", "#38BDF8", "#10B981", "#94A3B8"];
 const UI = {
   bg: "bg-slate-50",
   card: "bg-white/90 backdrop-blur border border-slate-200 shadow-sm rounded-2xl",
@@ -154,7 +159,28 @@ export default function DashboardBI() {
     try {
       // se quiser: /api/dashboard?range=30d
       const res = await axios.get(`${API_URL}/api/dashboard`);
-      setData(res.data);
+      const raw = res.data;
+      if (raw?.byMonth && Array.isArray(raw.byMonth)) {
+        raw.byMonth = raw.byMonth.map((m: Record<string, unknown>) => {
+          const hasSplit =
+            m.trayAtacado !== undefined || m.trayVarejo !== undefined || m.trayLegacy !== undefined;
+          if (hasSplit) {
+            return {
+              ...m,
+              trayAtacado: Number(m.trayAtacado ?? 0),
+              trayVarejo: Number(m.trayVarejo ?? 0),
+              trayLegacy: Number(m.trayLegacy ?? 0),
+            };
+          }
+          return {
+            ...m,
+            trayAtacado: 0,
+            trayVarejo: 0,
+            trayLegacy: Number(m.tray ?? 0),
+          };
+        });
+      }
+      setData(raw);
       setLastUpdate(new Date());
     } catch (e) {
       console.error(e);
@@ -173,9 +199,12 @@ export default function DashboardBI() {
     if (!data) return null;
     const shopee = data.byMonth.reduce((a, m) => a + (m.shopee || 0), 0);
     const tiktok = data.byMonth.reduce((a, m) => a + (m.tiktok || 0), 0);
-    const tray = data.byMonth.reduce((a, m) => a + (m.tray || 0), 0);
+    const trayAtacado = data.byMonth.reduce((a, m) => a + (m.trayAtacado || 0), 0);
+    const trayVarejo = data.byMonth.reduce((a, m) => a + (m.trayVarejo || 0), 0);
+    const trayLegacy = data.byMonth.reduce((a, m) => a + (m.trayLegacy || 0), 0);
+    const tray = trayAtacado + trayVarejo + trayLegacy;
     const total = data.byMonth.reduce((a, m) => a + (m.total || 0), 0);
-    return { shopee, tiktok, tray, total };
+    return { shopee, tiktok, trayAtacado, trayVarejo, trayLegacy, tray, total };
   }, [data]);
 
   if (loading) return <div className={cn(UI.bg, "min-h-screen flex items-center justify-center text-slate-500")}>Carregando...</div>;
@@ -195,7 +224,6 @@ export default function DashboardBI() {
                 <span className="text-sm font-semibold tracking-wide">DASHBOARD DE VENDAS</span>
               </div>
               <h1 className="mt-2 text-3xl md:text-4xl font-black tracking-tight">Visão Geral</h1>
-              <p className="mt-1 text-white/80 text-sm">Shopee + TikTok • KPIs, evolução mensal e produtos campeões</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -233,7 +261,7 @@ export default function DashboardBI() {
           </div>
 
           {/* Mini resumo do período */}
-          <div className="mt-5 grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="mt-5 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
               <div className="text-xs text-white/80 font-semibold">Total no período</div>
               <div className="text-lg font-black">{totals ? formatMoney(totals.total) : "-"}</div>
@@ -247,8 +275,16 @@ export default function DashboardBI() {
               <div className="text-lg font-black">{totals ? formatMoney(totals.tiktok) : "-"}</div>
             </div>
             <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
-              <div className="text-xs text-white/80 font-semibold">Tray</div>
-              <div className="text-lg font-black">{totals ? formatMoney(totals.tray) : "-"}</div>
+              <div className="text-xs text-white/80 font-semibold">Tray Atacado</div>
+              <div className="text-lg font-black">{totals ? formatMoney(totals.trayAtacado) : "-"}</div>
+            </div>
+            <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
+              <div className="text-xs text-white/80 font-semibold">Tray Varejo</div>
+              <div className="text-lg font-black">{totals ? formatMoney(totals.trayVarejo) : "-"}</div>
+            </div>
+            <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
+              <div className="text-xs text-white/80 font-semibold">Tray (legado)</div>
+              <div className="text-lg font-black">{totals ? formatMoney(totals.trayLegacy) : "-"}</div>
             </div>
           </div>
         </div>
@@ -294,7 +330,9 @@ export default function DashboardBI() {
                   { key: "total", label: "Total" },
                   { key: "shopee", label: "Shopee" },
                   { key: "tiktok", label: "TikTok" },
-                  { key: "tray", label: "Tray" },
+                  { key: "trayAtacado", label: "Tray Atac." },
+                  { key: "trayVarejo", label: "Tray Var." },
+                  { key: "trayLegacy", label: "Tray leg." },
                 ] as const).map((m) => (
                   <button
                     key={m.key}
@@ -339,7 +377,11 @@ export default function DashboardBI() {
                           ? "Shopee"
                           : barKey === "tiktok"
                             ? "TikTok"
-                            : "Tray"
+                            : barKey === "trayAtacado"
+                              ? "Tray Atacado"
+                              : barKey === "trayVarejo"
+                                ? "Tray Varejo"
+                                : "Tray legado"
                     }
                     radius={[12, 12, 4, 4]}
                     fill={barKey === "total" ? "#2563EB" : CHANNEL_COLORS[barKey] ?? "#2563EB"}
@@ -356,8 +398,14 @@ export default function DashboardBI() {
                 <PieChart>
                   <Pie data={data.byChannel} cx="50%" cy="45%" innerRadius={62} outerRadius={92} paddingAngle={4} dataKey="value">
                     {data.byChannel.map((channel, idx) => {
-                      const color =
-                        CHANNEL_COLORS[channel.name.toLowerCase()] ?? PIE_COLORS[idx % PIE_COLORS.length];
+                      const colorMap: Record<string, string> = {
+                        Shopee: CHANNEL_COLORS.shopee,
+                        TikTok: CHANNEL_COLORS.tiktok,
+                        "Tray Atacado": CHANNEL_COLORS.trayAtacado,
+                        "Tray Varejo": CHANNEL_COLORS.trayVarejo,
+                        "Tray (legado)": CHANNEL_COLORS.trayLegacy,
+                      };
+                      const color = colorMap[channel.name] ?? PIE_COLORS[idx % PIE_COLORS.length];
                       return <Cell key={idx} fill={color} stroke="none" />;
                     })}
                   </Pie>
@@ -391,23 +439,39 @@ export default function DashboardBI() {
                       <stop offset="5%" stopColor={CHANNEL_COLORS.tiktok} stopOpacity={0.18} />
                       <stop offset="95%" stopColor={CHANNEL_COLORS.tiktok} stopOpacity={0} />
                     </linearGradient>
-                    <linearGradient id="tr" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={CHANNEL_COLORS.tray} stopOpacity={0.18} />
-                      <stop offset="95%" stopColor={CHANNEL_COLORS.tray} stopOpacity={0} />
+                    <linearGradient id="tra" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={CHANNEL_COLORS.trayAtacado} stopOpacity={0.2} />
+                      <stop offset="95%" stopColor={CHANNEL_COLORS.trayAtacado} stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="trv" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={CHANNEL_COLORS.trayVarejo} stopOpacity={0.2} />
+                      <stop offset="95%" stopColor={CHANNEL_COLORS.trayVarejo} stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="trl" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={CHANNEL_COLORS.trayLegacy} stopOpacity={0.18} />
+                      <stop offset="95%" stopColor={CHANNEL_COLORS.trayLegacy} stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
                   <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#64748B", fontSize: 12 }} />
                   <YAxis axisLine={false} tickLine={false} tick={{ fill: "#64748B", fontSize: 12 }} tickFormatter={(v) => formatCompact(Number(v))} />
                   <Tooltip
-                    formatter={(value: any, name: any) => [
-                      formatMoney(Number(value || 0)),
-                      name === "shopee" ? "Shopee" : name === "tiktok" ? "TikTok" : "Tray",
-                    ]}
+                    formatter={(value: any, name: any) => {
+                      const labels: Record<string, string> = {
+                        shopee: "Shopee",
+                        tiktok: "TikTok",
+                        trayAtacado: "Tray Atacado",
+                        trayVarejo: "Tray Varejo",
+                        trayLegacy: "Tray legado",
+                      };
+                      return [formatMoney(Number(value || 0)), labels[String(name)] ?? name];
+                    }}
                   />
                   <Area type="monotone" dataKey="shopee" stroke={CHANNEL_COLORS.shopee} strokeWidth={3} fill="url(#sh)" dot={false} />
                   <Area type="monotone" dataKey="tiktok" stroke={CHANNEL_COLORS.tiktok} strokeWidth={3} fill="url(#tt)" dot={false} />
-                  <Area type="monotone" dataKey="tray" stroke={CHANNEL_COLORS.tray} strokeWidth={3} fill="url(#tr)" dot={false} />
+                  <Area type="monotone" dataKey="trayAtacado" stroke={CHANNEL_COLORS.trayAtacado} strokeWidth={2} fill="url(#tra)" dot={false} />
+                  <Area type="monotone" dataKey="trayVarejo" stroke={CHANNEL_COLORS.trayVarejo} strokeWidth={2} fill="url(#trv)" dot={false} />
+                  <Area type="monotone" dataKey="trayLegacy" stroke={CHANNEL_COLORS.trayLegacy} strokeWidth={2} strokeDasharray="4 3" fill="url(#trl)" dot={false} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -427,7 +491,9 @@ export default function DashboardBI() {
                           {p.channels?.map(ch => (
                             <span key={ch} className={cn(
                               "inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-extrabold text-white",
-                              ch === 'shopee' ? 'bg-orange-600' : ch === 'tiktok' ? 'bg-slate-800' : 'bg-sky-600'
+                              ch === 'shopee' ? 'bg-orange-600' : ch === 'tiktok' ? 'bg-slate-800' :
+                              ch === 'tray_atacado' ? 'bg-sky-900' : ch === 'tray_varejo' ? 'bg-sky-500' :
+                              ch === 'tray' ? 'bg-sky-600' : 'bg-slate-500'
                             )}>{ch}</span>
                           ))}
                         </div>
