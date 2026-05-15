@@ -55,7 +55,7 @@ interface ReturnRecord {
 const sourceLabel: Record<string, string> = {
   shopee: 'Shopee',
   tiktok: 'TikTok',
-  tray: 'Tray (legado)',
+  tray: 'Tray',
   tray_atacado: 'Tray Atacado',
   tray_varejo: 'Tray Varejo',
 };

@@ -118,7 +118,7 @@ export default function PaymentTypeFees() {
           <div>
             <h2 className="text-lg font-black tracking-tight text-slate-900">Taxas por tipo de pagamento (Tray)</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Cadastre taxas por loja (atacado / varejo) ou use &quot;tray&quot; legado como fallback na simulação.
+              Cadastre taxas por loja (atacado / varejo) ou use o canal genérico &quot;tray&quot; como fallback na simulação.
             </p>
           </div>
 
@@ -132,7 +132,7 @@ export default function PaymentTypeFees() {
               >
                 <option value="tray_atacado">Tray Atacado</option>
                 <option value="tray_varejo">Tray Varejo</option>
-                <option value="tray">Tray (legado / fallback)</option>
+                <option value="tray">Tray (fallback)</option>
               </select>
             </div>
             <div className="md:col-span-3">
@@ -197,7 +197,7 @@ export default function PaymentTypeFees() {
           <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
             <h3 className="text-sm font-extrabold tracking-wide text-slate-900">
               Taxas cadastradas — {month} —{" "}
-              {feeChannel === "tray_atacado" ? "Atacado" : feeChannel === "tray_varejo" ? "Varejo" : "Legado"}
+              {feeChannel === "tray_atacado" ? "Atacado" : feeChannel === "tray_varejo" ? "Varejo" : "Tray"}
             </h3>
           </div>
           <div className="p-6">

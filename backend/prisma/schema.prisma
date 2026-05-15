@@ -24,6 +24,8 @@ model Order {
   returnRecord OrderReturn?
   commissionFee Float?  // Net Commission Fee (taxa de comissão líquida)
   serviceFee    Float?  // Taxa de serviço bruta
+  settlementAmount  Float?  // Valor liquidado (relatório income TikTok)
+  partnerCommission Float?  // Comissões afiliados/criadores/agências (income TikTok)
   freight       Float?  // Frete (apenas canal tray)
   paymentType   String? @default("")  // Tipo de pagamento (ex: Pix - Vindi, Cartão de Crédito - Mercado Pago)
   @@unique([orderId, source])

@@ -26,6 +26,16 @@ type SimulationData = {
   margemLucro: number;
 };
 
+type SimulationItemKey =
+  | "adsInvestimento"
+  | "taxasShopee"
+  | "taxasTiktok"
+  | "taxasCartaoPix"
+  | "frete"
+  | "custoProducao"
+  | "custoFixo"
+  | "imposto";
+
 type ProductionCostLine = {
   productId: number | null;
   productCode: string;
@@ -88,17 +98,50 @@ function fmtDate(iso: string) {
   return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
+function monthToDate(m: string) {
+  const [y, mm] = (m || "").split("-").map((v) => Number(v));
+  if (!y || !mm) return null;
+  const d = new Date(y, mm - 1, 1);
+  if (isNaN(d.getTime())) return null;
+  return d;
+}
+
+function monthStr(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function clampMonthRange(a: string, b: string) {
+  const da = monthToDate(a);
+  const db = monthToDate(b);
+  if (!da || !db) return { start: a, end: b };
+  return da.getTime() <= db.getTime() ? { start: a, end: b } : { start: b, end: a };
+}
+
+function listMonthsInclusive(start: string, end: string) {
+  const ds = monthToDate(start);
+  const de = monthToDate(end);
+  if (!ds || !de) return [start];
+  const out: string[] = [];
+  const cur = new Date(ds.getFullYear(), ds.getMonth(), 1);
+  const last = new Date(de.getFullYear(), de.getMonth(), 1);
+  while (cur.getTime() <= last.getTime()) {
+    out.push(monthStr(cur));
+    cur.setMonth(cur.getMonth() + 1);
+  }
+  return out.length ? out : [start];
+}
+
 const channelLabel: Record<string, string> = {
   all: "Todos os canais",
   shopee: "Shopee",
   tiktok: "TikTok",
-  tray: "Site Tray (atacado + varejo + legado)",
+  tray: "Site Tray (atacado + varejo)",
   tray_atacado: "Tray Atacado",
   tray_varejo: "Tray Varejo",
 };
 
 export default function Simulation(): JSX.Element {
-  const [data, setData] = useState<SimulationData | null>(null);
+  const [baseData, setBaseData] = useState<SimulationData | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -110,23 +153,136 @@ export default function Simulation(): JSX.Element {
 
   const now = new Date();
   const defaultMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const [month, setMonth] = useState(defaultMonth);
+  const [startMonth, setStartMonth] = useState(defaultMonth);
+  const [endMonth, setEndMonth] = useState(defaultMonth);
   const [channel, setChannel] = useState<string>("all");
+
+  const [include, setInclude] = useState<Record<SimulationItemKey, boolean>>({
+    adsInvestimento: true,
+    taxasShopee: true,
+    taxasTiktok: true,
+    taxasCartaoPix: true,
+    frete: true,
+    custoProducao: true,
+    custoFixo: true,
+    imposto: true,
+  });
+
+  function toggleInclude(key: SimulationItemKey) {
+    setInclude((s) => ({ ...s, [key]: !s[key] }));
+  }
+
+  function computeViewData(d: SimulationData | null): SimulationData | null {
+    if (!d) return null;
+    const faturamentoBruto = Number(d.faturamentoBruto || 0);
+
+    const adsInvestimento = include.adsInvestimento ? Number(d.adsInvestimento || 0) : 0;
+    const taxasShopee = include.taxasShopee ? Number(d.taxasShopee || 0) : 0;
+    const taxasTiktok = include.taxasTiktok ? Number(d.taxasTiktok || 0) : 0;
+    const taxasCartaoPix = include.taxasCartaoPix ? Number(d.taxasCartaoPix || 0) : 0;
+    const frete = include.frete ? Number(d.frete || 0) : 0;
+    const custoProducao = include.custoProducao ? Number(d.custoProducao || 0) : 0;
+    const custoFixo = include.custoFixo ? Number(d.custoFixo || 0) : 0;
+    const imposto = include.imposto ? Number(d.imposto || 0) : 0;
+
+    const totalDescontos =
+      adsInvestimento + taxasShopee + taxasTiktok + taxasCartaoPix + frete + custoProducao + custoFixo + imposto;
+    const lucroLiquido = faturamentoBruto - totalDescontos;
+    const margemLucro = faturamentoBruto > 0 ? (lucroLiquido / faturamentoBruto) * 100 : 0;
+
+    const pct = (v: number) => (faturamentoBruto > 0 ? (v / faturamentoBruto) * 100 : 0);
+
+    return {
+      ...d,
+      adsInvestimento,
+      adsPercent: pct(adsInvestimento),
+      taxasShopee,
+      taxasShopeePercent: pct(taxasShopee),
+      taxasTiktok,
+      taxasTiktokPercent: pct(taxasTiktok),
+      taxasCartaoPix,
+      taxasCartaoPixPercent: pct(taxasCartaoPix),
+      frete,
+      fretePercent: pct(frete),
+      custoProducao,
+      custoProducaoPercent: pct(custoProducao),
+      custoFixo,
+      custoFixoPercent: pct(custoFixo),
+      imposto,
+      impostoPercent: pct(imposto),
+      lucroLiquido,
+      margemLucro,
+    };
+  }
+
+  const data = computeViewData(baseData);
+  const monthRange = clampMonthRange(startMonth, endMonth);
+  const monthsInRange = listMonthsInclusive(monthRange.start, monthRange.end);
+  const isMultiMonth = monthsInRange.length > 1;
 
   async function fetchData() {
     setLoading(true);
     setMessage("");
     try {
-      const qs = new URLSearchParams();
-      qs.set("month", month);
-      qs.set("channel", channel);
-      const res = await fetch(`${API_URL}/api/simulation?${qs.toString()}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || "Falha ao carregar simulação.");
-      setData(json);
+      const results: SimulationData[] = [];
+      for (const m of monthsInRange) {
+        const qs = new URLSearchParams();
+        qs.set("month", m);
+        qs.set("channel", channel);
+        const res = await fetch(`${API_URL}/api/simulation?${qs.toString()}`);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.message || "Falha ao carregar simulação.");
+        results.push(json as SimulationData);
+      }
+
+      if (results.length === 1) {
+        setBaseData(results[0]);
+      } else {
+        const sum = <K extends keyof SimulationData>(key: K) => results.reduce((acc, r) => acc + Number(r[key] || 0), 0);
+        const faturamentoBruto = sum("faturamentoBruto");
+        const adsInvestimento = sum("adsInvestimento");
+        const taxasShopee = sum("taxasShopee");
+        const taxasTiktok = sum("taxasTiktok");
+        const taxasCartaoPix = sum("taxasCartaoPix");
+        const frete = sum("frete");
+        const custoProducao = sum("custoProducao");
+        const custoFixo = sum("custoFixo");
+        const imposto = sum("imposto");
+
+        const lucroLiquido =
+          faturamentoBruto -
+          (adsInvestimento + taxasShopee + taxasTiktok + taxasCartaoPix + frete + custoProducao + custoFixo + imposto);
+        const margemLucro = faturamentoBruto > 0 ? (lucroLiquido / faturamentoBruto) * 100 : 0;
+
+        const pct = (v: number) => (faturamentoBruto > 0 ? (v / faturamentoBruto) * 100 : 0);
+
+        setBaseData({
+          month: `${monthRange.start} → ${monthRange.end}`,
+          channel,
+          faturamentoBruto,
+          adsInvestimento,
+          adsPercent: pct(adsInvestimento),
+          taxasShopee,
+          taxasShopeePercent: pct(taxasShopee),
+          taxasTiktok,
+          taxasTiktokPercent: pct(taxasTiktok),
+          taxasCartaoPix,
+          taxasCartaoPixPercent: pct(taxasCartaoPix),
+          frete,
+          fretePercent: pct(frete),
+          custoProducao,
+          custoProducaoPercent: pct(custoProducao),
+          custoFixo,
+          custoFixoPercent: pct(custoFixo),
+          imposto,
+          impostoPercent: pct(imposto),
+          lucroLiquido,
+          margemLucro,
+        });
+      }
     } catch (e: any) {
       console.error(e);
-      setData(null);
+      setBaseData(null);
       setMessage(`Erro: ${e.message}`);
     } finally {
       setLoading(false);
@@ -136,7 +292,7 @@ export default function Simulation(): JSX.Element {
   useEffect(() => {
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, channel]);
+  }, [startMonth, endMonth, channel]);
 
   function closeDetailModal() {
     if (detailLoading) return;
@@ -147,13 +303,14 @@ export default function Simulation(): JSX.Element {
   }
 
   async function openCustoDetail() {
+    if (isMultiMonth) return;
     setDetailKind("custo");
     setDetailLoading(true);
     setDetailError("");
     setCustoDetail(null);
     try {
       const qs = new URLSearchParams();
-      qs.set("month", month);
+      qs.set("month", startMonth);
       qs.set("channel", channel);
       const res = await fetch(`${API_URL}/api/simulation/production-cost?${qs.toString()}`);
       const json = await res.json();
@@ -167,13 +324,14 @@ export default function Simulation(): JSX.Element {
   }
 
   async function openFaturamentoDetail() {
+    if (isMultiMonth) return;
     setDetailKind("faturamento");
     setDetailLoading(true);
     setDetailError("");
     setFatDetail(null);
     try {
       const qs = new URLSearchParams();
-      qs.set("month", month);
+      qs.set("month", startMonth);
       qs.set("channel", channel);
       const res = await fetch(`${API_URL}/api/simulation/gross-revenue?${qs.toString()}`);
       const json = await res.json();
@@ -204,12 +362,23 @@ export default function Simulation(): JSX.Element {
             <div className="flex flex-wrap items-end gap-3">
               <div>
                 <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
-                  Mês
+                  Mês inicial
                 </label>
                 <input
                   type="month"
-                  value={month}
-                  onChange={(e) => setMonth(e.target.value)}
+                  value={startMonth}
+                  onChange={(e) => setStartMonth(e.target.value)}
+                  className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
+                  Mês final
+                </label>
+                <input
+                  type="month"
+                  value={endMonth}
+                  onChange={(e) => setEndMonth(e.target.value)}
                   className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
                 />
               </div>
@@ -238,6 +407,27 @@ export default function Simulation(): JSX.Element {
                 {loading ? "..." : "Calcular"}
               </button>
             </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs font-semibold text-slate-600">
+              Período:{" "}
+              <span className="font-extrabold text-slate-900">
+                {monthRange.start}
+              </span>{" "}
+              {monthRange.start !== monthRange.end ? (
+                <>
+                  <span className="text-slate-400">→</span>{" "}
+                  <span className="font-extrabold text-slate-900">{monthRange.end}</span>{" "}
+                  <span className="text-slate-400">·</span>{" "}
+                  <span className="font-bold text-slate-700">{monthsInRange.length} meses</span>
+                </>
+              ) : null}
+            </div>
+            {isMultiMonth ? (
+              <div className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                Detalhes (pedidos / custo de produção) disponíveis apenas para 1 mês.
+              </div>
+            ) : null}
           </div>
           {message && <div className="mt-3 text-sm font-semibold text-red-600">{message}</div>}
         </div>
@@ -415,6 +605,7 @@ export default function Simulation(): JSX.Element {
                       <button
                         type="button"
                         onClick={openFaturamentoDetail}
+                        disabled={isMultiMonth}
                         className="text-left font-semibold text-slate-900 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-600"
                       >
                         Faturamento Bruto
@@ -424,27 +615,77 @@ export default function Simulation(): JSX.Element {
                     <td className="py-2 w-16 text-right text-slate-500">—</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Investimento em Ads</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.adsInvestimento}
+                          onChange={() => toggleInclude("adsInvestimento")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Investimento em Ads</span>
+                      </label>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.adsInvestimento)}</td>
                     <td className="py-2 text-right text-slate-500">{data.adsPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Taxas Shopee</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.taxasShopee}
+                          onChange={() => toggleInclude("taxasShopee")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Taxas Shopee</span>
+                      </label>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.taxasShopee)}</td>
                     <td className="py-2 text-right text-slate-500">{data.taxasShopeePercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Taxas TikTok</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.taxasTiktok}
+                          onChange={() => toggleInclude("taxasTiktok")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Taxas TikTok</span>
+                      </label>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.taxasTiktok)}</td>
                     <td className="py-2 text-right text-slate-500">{data.taxasTiktokPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Taxas Cartão/PIX</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.taxasCartaoPix}
+                          onChange={() => toggleInclude("taxasCartaoPix")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Taxas Cartão/PIX</span>
+                      </label>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.taxasCartaoPix)}</td>
                     <td className="py-2 text-right text-slate-500">{data.taxasCartaoPixPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Frete</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.frete}
+                          onChange={() => toggleInclude("frete")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Frete</span>
+                      </label>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.frete)}</td>
                     <td className="py-2 text-right text-slate-500">{data.fretePercent.toFixed(2)}%</td>
                   </tr>
@@ -453,21 +694,51 @@ export default function Simulation(): JSX.Element {
                       <button
                         type="button"
                         onClick={openCustoDetail}
+                        disabled={isMultiMonth}
                         className="text-left text-slate-700 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-600"
                       >
-                        (-) Custo de Produção
+                        <span className="inline-flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={include.custoProducao}
+                            onChange={() => toggleInclude("custoProducao")}
+                            className="h-4 w-4 rounded border-slate-300"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <span>(-) Custo de Produção</span>
+                        </span>
                       </button>
                     </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.custoProducao)}</td>
                     <td className="py-2 text-right text-slate-500">{data.custoProducaoPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Custo Fixo</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.custoFixo}
+                          onChange={() => toggleInclude("custoFixo")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Custo Fixo</span>
+                      </label>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.custoFixo)}</td>
                     <td className="py-2 text-right text-slate-500">{data.custoFixoPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Imposto ({data.impostoPercent}%)</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.imposto}
+                          onChange={() => toggleInclude("imposto")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Imposto</span>
+                      </label>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.imposto)}</td>
                     <td className="py-2 text-right text-slate-500">{data.impostoPercent.toFixed(2)}%</td>
                   </tr>

@@ -52,6 +52,9 @@ function App() {
   const [itemsFile, setItemsFile] = useState<File | null>(null);
   const [itemsTraySource, setItemsTraySource] = useState<'tray' | 'tray_atacado' | 'tray_varejo'>('tray_atacado');
   const [itemsMessage, setItemsMessage] = useState('');
+  const [tiktokIncomeFile, setTiktokIncomeFile] = useState<File | null>(null);
+  const [tiktokIncomeMessage, setTiktokIncomeMessage] = useState('');
+  const [tiktokIncomeLoading, setTiktokIncomeLoading] = useState(false);
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -120,6 +123,49 @@ function App() {
       }
     } catch (error: any) {
       setMessage(`Erro: ${error.message}`);
+    }
+  };
+
+  const handleTiktokIncomeFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      setTiktokIncomeFile(e.target.files[0]);
+    }
+  };
+
+  const handleTiktokIncomeSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!tiktokIncomeFile) {
+      setTiktokIncomeMessage('Por favor, selecione o relatório de income (.xlsx).');
+      return;
+    }
+
+    setTiktokIncomeLoading(true);
+    setTiktokIncomeMessage('Enviando e processando liquidação TikTok...');
+    const formData = new FormData();
+    formData.append('file', tiktokIncomeFile);
+
+    try {
+      const response = await fetch(`${API_URL}/api/tiktok/income/import`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await response.json();
+
+      if (response.ok) {
+        const nf = data.notFound ?? 0;
+        const extra =
+          nf > 0
+            ? ` ${nf} pedido(s) do arquivo não existem no sistema (importe o CSV de pedidos antes).`
+            : '';
+        setTiktokIncomeMessage(`${data.message} Atualizados: ${data.updated ?? 0}.${extra}`);
+        fetchSales();
+      } else {
+        throw new Error(data.message || 'Erro na importação de income TikTok.');
+      }
+    } catch (error: any) {
+      setTiktokIncomeMessage(`Erro: ${error.message}`);
+    } finally {
+      setTiktokIncomeLoading(false);
     }
   };
 
@@ -504,6 +550,50 @@ function App() {
             {itemsMessage && (
               <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
                 {itemsMessage}
+              </div>
+            )}
+          </div>
+
+          {/* Card: Income / Liquidação TikTok */}
+          <div className={cn(UI.card, 'p-6')}>
+            <div>
+              <h2 className="text-lg font-black tracking-tight text-slate-900">Income / Liquidação TikTok Shop</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Relatório de receitas exportado do TikTok (<span className="font-bold">.xlsx</span>, aba{' '}
+                <span className="font-bold">Detalhes do pedido</span>). Atualiza valor liquidado, taxas da plataforma e
+                comissões de parceiros nos pedidos já importados.
+              </p>
+            </div>
+
+            <form onSubmit={handleTiktokIncomeSubmit} className="mt-5 grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+              <div className="md:col-span-9">
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Arquivo income</label>
+                <input
+                  type="file"
+                  onChange={handleTiktokIncomeFileChange}
+                  accept=".xlsx,.xls"
+                  className="mt-2 block w-full text-sm text-slate-700 file:mr-4 file:rounded-xl file:border-0 file:bg-slate-100 file:px-4 file:py-2 file:text-sm file:font-extrabold file:text-slate-900 hover:file:bg-slate-200"
+                />
+              </div>
+              <div className="md:col-span-3">
+                <button
+                  type="submit"
+                  disabled={!tiktokIncomeFile || tiktokIncomeLoading}
+                  className={cn(
+                    'w-full rounded-xl px-4 py-2 text-sm font-extrabold shadow-sm transition',
+                    tiktokIncomeFile && !tiktokIncomeLoading
+                      ? 'bg-slate-800 text-white hover:bg-slate-700'
+                      : 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                  )}
+                >
+                  {tiktokIncomeLoading ? 'Processando...' : 'Importar liquidação'}
+                </button>
+              </div>
+            </form>
+
+            {tiktokIncomeMessage && (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
+                {tiktokIncomeMessage}
               </div>
             )}
           </div>

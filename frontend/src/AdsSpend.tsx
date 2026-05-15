@@ -10,6 +10,13 @@ type AdSpendRow = {
   notes: string;
 };
 
+type AdsImportMonthRow = {
+  month: string;
+  imported: number;
+  existing: number;
+  result: number;
+};
+
 function cn(...classes: Array<string | false | undefined | null>) {
   return classes.filter(Boolean).join(" ");
 }
@@ -46,6 +53,13 @@ export default function AdsSpend() {
   const [purgePassword, setPurgePassword] = useState("");
   const [purgeLoading, setPurgeLoading] = useState(false);
   const [purgeError, setPurgeError] = useState("");
+
+  const [importChannel, setImportChannel] = useState<string>("shopee");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importMode, setImportMode] = useState<"replace" | "add">("replace");
+  const [importLoading, setImportLoading] = useState(false);
+  const [importMessage, setImportMessage] = useState("");
+  const [preview, setPreview] = useState<null | { months: AdsImportMonthRow[]; total: number; totalResult: number }>(null);
 
   const total = useMemo(() => rows.reduce((a, r) => a + (r.amount || 0), 0), [rows]);
 
@@ -143,6 +157,56 @@ export default function AdsSpend() {
     }
   }
 
+  async function callImport(dryRun: boolean) {
+    setImportMessage("");
+    if (!importFile) {
+      setImportMessage("Selecione um arquivo (.xlsx ou .csv).");
+      return null;
+    }
+    setImportLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("channel", importChannel);
+      fd.append("mode", importMode);
+      fd.append("dryRun", dryRun ? "1" : "0");
+      fd.append("file", importFile);
+
+      const res = await fetch(`${API_URL}/api/adspend/import`, { method: "POST", body: fd });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || "Falha ao importar.");
+      return json;
+    } catch (err: any) {
+      setImportMessage(`Erro: ${err.message}`);
+      return null;
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  async function previewImport(e: React.FormEvent) {
+    e.preventDefault();
+    setPreview(null);
+    const json = await callImport(true);
+    if (!json) return;
+    const months = Array.isArray(json?.months) ? (json.months as AdsImportMonthRow[]) : [];
+    const total = typeof json?.total === "number" ? json.total : 0;
+    const totalResult = typeof json?.totalResult === "number" ? json.totalResult : 0;
+    setPreview({ months, total, totalResult });
+    setImportMessage("Pré-visualização pronta. Confira os meses e confirme para gravar.");
+  }
+
+  async function confirmImport() {
+    const json = await callImport(false);
+    if (!json) return;
+    const totalResult = typeof json?.totalResult === "number" ? json.totalResult : null;
+    setImportMessage(
+      `Importação concluída${totalResult === null ? "" : ` (total ${totalResult.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })})`}.`,
+    );
+    setPreview(null);
+    setImportFile(null);
+    fetchRows();
+  }
+
   return (
     <div className={cn(UI.bg, "min-h-screen relative")}>
       {purgeOpen && (
@@ -207,6 +271,128 @@ export default function AdsSpend() {
             <h2 className="text-lg font-black tracking-tight text-slate-900">Gastos mensais de ADS</h2>
             <p className="mt-1 text-sm text-slate-500">Cadastre o investimento por mês e por canal (Meta, Google, etc.).</p>
           </div>
+
+          <form onSubmit={previewImport} className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+              <div className="min-w-0">
+                <div className="text-sm font-extrabold text-slate-900">Importar por planilha</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  Shopee: agrupa por mês linhas com “Pagamento no Saldo da Carteira - Recarga por compra de ADS”.
+                </div>
+              </div>
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Canal</label>
+                  <select
+                    value={importChannel}
+                    onChange={(e) => setImportChannel(e.target.value)}
+                    className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
+                  >
+                    <option value="shopee">Shopee</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Modo</label>
+                  <select
+                    value={importMode}
+                    onChange={(e) => setImportMode(e.target.value as any)}
+                    className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
+                  >
+                    <option value="replace">Sobrescrever mês</option>
+                    <option value="add">Somar ao existente</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Arquivo</label>
+                  <input
+                    type="file"
+                    accept=".xlsx,.csv"
+                    onChange={(e) => {
+                      setImportFile(e.target.files?.[0] ?? null);
+                      setPreview(null);
+                    }}
+                    className="mt-2 block w-full text-sm text-slate-700 file:mr-4 file:rounded-xl file:border-0 file:bg-slate-100 file:px-4 file:py-2 file:text-sm file:font-extrabold file:text-slate-900 hover:file:bg-slate-200"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={importLoading || !importFile}
+                  className={cn(
+                    "rounded-xl px-4 py-2 text-sm font-extrabold shadow-sm transition",
+                    importLoading || !importFile
+                      ? "bg-slate-200 text-slate-500 cursor-not-allowed"
+                      : "bg-slate-900 text-white hover:bg-slate-800",
+                  )}
+                >
+                  {importLoading ? "Processando…" : "Pré-visualizar"}
+                </button>
+              </div>
+            </div>
+            {preview && (
+              <div className="mt-4 overflow-auto rounded-2xl border border-slate-200 bg-white">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-slate-100 border-b border-slate-200">
+                    <tr className="text-left text-xs font-extrabold tracking-widest uppercase text-slate-600">
+                      <th className="px-4 py-3">Mês</th>
+                      <th className="px-4 py-3">Encontrado no arquivo</th>
+                      <th className="px-4 py-3">Existente no banco</th>
+                      <th className="px-4 py-3">Resultado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {preview.months.map((m) => (
+                      <tr key={m.month} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 font-extrabold text-slate-900">{m.month}</td>
+                        <td className="px-4 py-3 font-bold text-slate-900">
+                          {Number(m.imported || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                        </td>
+                        <td className="px-4 py-3 text-slate-700 font-semibold">
+                          {Number(m.existing || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                        </td>
+                        <td className="px-4 py-3 font-extrabold text-slate-900">
+                          {Number(m.result || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                        </td>
+                      </tr>
+                    ))}
+                    {preview.months.length === 0 && (
+                      <tr>
+                        <td className="px-4 py-6 text-sm text-slate-500" colSpan={4}>
+                          Nenhuma linha de ADS encontrada no arquivo.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {preview && preview.months.length > 0 && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs font-semibold text-slate-600">
+                  Total (arquivo):{" "}
+                  <span className="font-extrabold text-slate-900">
+                    {preview.total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                  </span>
+                  <span className="mx-2 text-slate-300">·</span>
+                  Total (resultado):{" "}
+                  <span className="font-extrabold text-slate-900">
+                    {preview.totalResult.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={confirmImport}
+                  disabled={importLoading}
+                  className={cn(
+                    "rounded-xl px-4 py-2 text-sm font-extrabold shadow-sm transition",
+                    importLoading ? "bg-slate-200 text-slate-500 cursor-not-allowed" : "bg-emerald-600 text-white hover:bg-emerald-700",
+                  )}
+                >
+                  {importLoading ? "Importando…" : "Confirmar importação"}
+                </button>
+              </div>
+            )}
+            {importMessage && <div className="mt-3 text-sm font-semibold text-slate-700">{importMessage}</div>}
+          </form>
 
           <form onSubmit={upsert} className="mt-5 grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
             <div className="md:col-span-3">

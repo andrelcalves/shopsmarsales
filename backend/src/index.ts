@@ -2,12 +2,13 @@
 import express from 'express';
 import cors from 'cors';
 import formidable from 'formidable';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import fs from 'fs';
 import path from 'path';
 import util from 'util';
 import { createRequire } from 'module';
 import * as shopeeApi from './shopeeApi.js';
+import { parseTikTokIncomeReport } from './tiktokIncome.js';
 
 type FormFields = Record<string, unknown>;
 type FormFiles = Record<string, unknown>;
@@ -32,6 +33,14 @@ const TRAY_STORE_ID_VAREJO = '1178940';
 const TRAY_SOURCE_ATACADO = 'tray_atacado';
 const TRAY_SOURCE_VAREJO = 'tray_varejo';
 const TRAY_ORDER_SOURCES_LIST = [TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO, 'tray'] as const;
+
+/** Alinhado ao PRD (vendas diárias por canal): não entram em métricas de venda agregadas. */
+const ORDER_STATUS_EXCLUDED_FROM_SALES_METRICS: Prisma.OrderWhereInput[] = [
+  { status: { contains: 'ancelado', mode: 'insensitive' } },
+  { status: { contains: 'Não pago', mode: 'insensitive' } },
+  { status: { contains: 'Aguardando pagamento', mode: 'insensitive' } },
+  { status: 'Devolvido' },
+];
 
 function trayDigitsOnly(s: string): string {
   return String(s || '').replace(/\D/g, '');
@@ -92,7 +101,7 @@ function channelLabelForChart(source: string): string {
     case TRAY_SOURCE_VAREJO:
       return 'Tray Varejo';
     case 'tray':
-      return 'Tray (legado)';
+      return 'Tray';
     default:
       return source.charAt(0).toUpperCase() + source.slice(1);
   }
@@ -450,17 +459,26 @@ function monthStartFromYYYYMM(v: string): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+/** Início do dia local para YYYY-MM-DD (validação de calendário). */
+function dateStartFromYYYYMMDD(v: string): Date | null {
+  const s = String(v || '').trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const yyyy = Number(m[1]);
+  const mm = Number(m[2]) - 1;
+  const dd = Number(m[3]);
+  const d = new Date(yyyy, mm, dd);
+  if (d.getFullYear() !== yyyy || d.getMonth() !== mm || d.getDate() !== dd) return null;
+  return d;
+}
+
 /** Mesmo filtro de pedidos usado em GET /api/simulation (mês + canal + status). */
 function buildSimulationOrderWhere(monthStart: Date, channelRaw: string): any {
   const channel = String(channelRaw || 'all').trim().toLowerCase();
   const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
   const orderWhere: any = {
     orderDate: { gte: monthStart, lt: monthEnd },
-    NOT: [
-      { status: { contains: 'ancelado', mode: 'insensitive' } },
-      { status: { contains: 'Não pago', mode: 'insensitive' } },
-      { status: 'Devolvido' },
-    ],
+    NOT: [...ORDER_STATUS_EXCLUDED_FROM_SALES_METRICS],
   };
   if (channel !== 'all') {
     if (channel === 'tray') {
@@ -633,6 +651,89 @@ function getFileFromFormidable(files: FormFiles) {
 function getFilePath(file: any): string | undefined {
   if (!file) return undefined;
   return file.filepath || file.path || file.filePath || file.tempFilePath;
+}
+
+function monthKeyFromAnyDate(v: unknown): string | null {
+  if (!v) return null;
+  const s = String(v).trim();
+  const m1 = s.match(/^(\d{4})-(\d{2})/);
+  if (m1) return `${m1[1]}-${m1[2]}`;
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  if (typeof v === 'number') {
+    // Excel serial date (best-effort)
+    const jsDate = new Date(Math.round((v - 25569) * 86400 * 1000));
+    if (!isNaN(jsDate.getTime())) return `${jsDate.getFullYear()}-${String(jsDate.getMonth() + 1).padStart(2, '0')}`;
+  }
+  return null;
+}
+
+function parseShopeeAdsWalletReport(filepath: string) {
+  const ext = String(path.extname(filepath || '')).toLowerCase();
+  const workbook =
+    ext === '.csv'
+      ? xlsx.readFile(filepath, { FS: ',', raw: true })
+      : xlsx.readFile(filepath, { raw: true });
+
+  const sheetName = workbook.SheetNames[0];
+  const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
+    header: 1,
+    raw: true,
+    defval: null,
+  }) as unknown[][];
+
+  const headerIdx = rows.findIndex((r) => {
+    const a = (r || []).map((c) => String(c ?? '').trim());
+    return a.includes('Data') && a.includes('Descrição') && a.includes('Valor');
+  });
+  if (headerIdx < 0) {
+    return { byMonth: new Map<string, number>(), matchedRows: 0, total: 0, message: 'Cabeçalho não encontrado.' };
+  }
+
+  const header = (rows[headerIdx] || []).map((c) => String(c ?? '').trim());
+  const col = (name: string) => header.findIndex((h) => h === name);
+  const idxData = col('Data');
+  const idxTipo = col('Tipo de transação');
+  const idxDesc = col('Descrição');
+  const idxValor = col('Valor');
+
+  if (idxData < 0 || idxDesc < 0 || idxValor < 0) {
+    return { byMonth: new Map<string, number>(), matchedRows: 0, total: 0, message: 'Colunas obrigatórias ausentes.' };
+  }
+
+  const wantText = 'Pagamento no Saldo da Carteira - Recarga por compra de ADS'.toLowerCase();
+  const byMonth = new Map<string, number>();
+  let matchedRows = 0;
+
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const dateVal = r[idxData];
+    const monthKey = monthKeyFromAnyDate(dateVal);
+    if (!monthKey) continue;
+
+    const tipo = idxTipo >= 0 ? String(r[idxTipo] ?? '').trim() : '';
+    const desc = String(r[idxDesc] ?? '').trim();
+    const combined = `${tipo} - ${desc}`.toLowerCase();
+
+    const isMatch =
+      combined.includes(wantText) ||
+      (desc.toLowerCase().includes('recarga por compra de ads') &&
+        tipo.toLowerCase().includes('saldo da carteira') &&
+        tipo.toLowerCase().includes('pagamento'));
+
+    if (!isMatch) continue;
+
+    const rawVal = r[idxValor];
+    const value = typeof rawVal === 'number' ? rawVal : parseBrNumber(rawVal);
+    const amount = Math.abs(Number(value || 0));
+    if (!amount) continue;
+
+    matchedRows++;
+    byMonth.set(monthKey, Number(((byMonth.get(monthKey) || 0) + amount).toFixed(2)));
+  }
+
+  const total = Number([...byMonth.values()].reduce((a, b) => a + b, 0).toFixed(2));
+  return { byMonth, matchedRows, total, message: '' };
 }
 
 function slugifyProductKey(name: string, variation: string): string {
@@ -1358,6 +1459,201 @@ async function main() {
       console.error(e);
       return res.status(500).json({ message: 'Erro ao remover todos os gastos de ADS.' });
     }
+  });
+
+  // Importação de ADS por planilha (inicialmente Shopee)
+  // POST /api/adspend/import (multipart/form-data: channel, file)
+  app.post('/api/adspend/import', (req, res) => {
+    const form = formidable({ multiples: false, keepExtensions: true });
+
+    form.parse(req, async (err: unknown, fields: FormFields, files: FormFiles) => {
+      if (err) return res.status(500).json({ message: 'Erro no form.' });
+
+      try {
+        const { file } = getFileFromFormidable(files);
+        if (!file) return res.status(400).json({ message: 'Arquivo não enviado.' });
+
+        const filepath = getFilePath(file);
+        if (!filepath) return res.status(400).json({ message: 'Caminho do arquivo não encontrado.' });
+
+        const channel = String(first((fields as any).channel) ?? '')
+          .trim()
+          .toLowerCase();
+
+        const mode = String(first((fields as any).mode) ?? 'replace')
+          .trim()
+          .toLowerCase(); // replace | add
+        const dryRunRaw = String(first((fields as any).dryRun) ?? '')
+          .trim()
+          .toLowerCase();
+        const dryRun = dryRunRaw === '1' || dryRunRaw === 'true' || dryRunRaw === 'yes';
+
+        if (!channel) return res.status(400).json({ message: 'channel obrigatório.' });
+        if (channel !== 'shopee') return res.status(400).json({ message: 'Por enquanto, a importação suporta apenas o canal shopee.' });
+        if (mode !== 'replace' && mode !== 'add') return res.status(400).json({ message: 'mode inválido. Use replace | add.' });
+
+        const { byMonth, matchedRows, total, message } = parseShopeeAdsWalletReport(filepath);
+        if (message) return res.status(400).json({ message });
+        if (byMonth.size === 0) {
+          return res.status(200).json({ message: 'Nenhuma linha de ADS encontrada no arquivo.', dryRun, mode, matchedRows, total, months: [] });
+        }
+
+        const prismaAny = prisma as any;
+        if (!prismaAny.adSpend) return res.status(500).json({ message: 'Model AdSpend não disponível. Rode prisma generate.' });
+
+        const monthKeys = [...byMonth.keys()].filter(Boolean).sort((a, b) => a.localeCompare(b));
+        const monthDates = monthKeys
+          .map((k) => ({ k, d: monthStartFromYYYYMM(k) }))
+          .filter((x): x is { k: string; d: Date } => !!x.d);
+
+        const existingRows = await prismaAny.adSpend.findMany({
+          where: { channel, month: { in: monthDates.map((x) => x.d) } },
+        });
+        const existingByKey = new Map<string, number>();
+        for (const r of existingRows || []) {
+          const dt = (r as any).month as Date;
+          const k = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+          existingByKey.set(k, Number((r as any).amount || 0));
+        }
+
+        const monthsOut: Array<{ month: string; imported: number; existing: number; result: number }> = [];
+        for (const { k, d } of monthDates) {
+          const imported = Number(byMonth.get(k) || 0);
+          const existing = Number(existingByKey.get(k) || 0);
+          const result = mode === 'add' ? Number((existing + imported).toFixed(2)) : imported;
+          monthsOut.push({ month: k, imported, existing, result });
+        }
+
+        if (!dryRun) {
+          for (const m of monthsOut) {
+            const month = monthStartFromYYYYMM(m.month);
+            if (!month) continue;
+            await prismaAny.adSpend.upsert({
+              where: { month_channel: { month, channel } },
+              update: {
+                amount: m.result,
+                notes: `Import Shopee (${mode === 'add' ? 'somar' : 'sobrescrever'}): Pagamento no Saldo da Carteira - Recarga por compra de ADS`,
+              },
+              create: {
+                month,
+                channel,
+                amount: m.result,
+                notes: `Import Shopee (${mode === 'add' ? 'somar' : 'sobrescrever'}): Pagamento no Saldo da Carteira - Recarga por compra de ADS`,
+              },
+            });
+          }
+        }
+
+        const totalResult = Number(monthsOut.reduce((a, m) => a + (m.result || 0), 0).toFixed(2));
+        return res.status(200).json({
+          message: dryRun ? 'Pré-visualização concluída.' : 'Importação concluída.',
+          channel,
+          dryRun,
+          mode,
+          matchedRows,
+          total,
+          totalResult,
+          months: monthsOut,
+        });
+      } catch (e) {
+        console.error(e);
+        return res.status(500).json({ message: 'Erro ao importar ADS por planilha.' });
+      }
+    });
+  });
+
+  // Importação income / liquidação TikTok Shop (xlsx, aba Detalhes do pedido)
+  // POST /api/tiktok/income/import (multipart: file)
+  app.post('/api/tiktok/income/import', (req, res) => {
+    const form = formidable({ multiples: false, keepExtensions: true });
+
+    form.parse(req, async (err: unknown, _fields: FormFields, files: FormFiles) => {
+      if (err) return res.status(500).json({ message: 'Erro no form.' });
+
+      try {
+        const { file } = getFileFromFormidable(files);
+        if (!file) return res.status(400).json({ message: 'Arquivo não enviado.' });
+
+        const filepath = getFilePath(file);
+        if (!filepath) return res.status(400).json({ message: 'Caminho do arquivo não encontrado.' });
+
+        const dryRunRaw = String(first((_fields as any).dryRun) ?? '').trim().toLowerCase();
+        const dryRun = dryRunRaw === '1' || dryRunRaw === 'true' || dryRunRaw === 'yes';
+
+        const { orders, rawRows, orderRows, message } = parseTikTokIncomeReport(filepath);
+        if (message) return res.status(400).json({ message });
+        if (orders.length === 0) {
+          return res.status(200).json({
+            message: 'Nenhum pedido liquidado encontrado na aba Detalhes do pedido.',
+            dryRun,
+            rawRows,
+            orderRows,
+            matched: 0,
+            notFound: 0,
+            updated: 0,
+          });
+        }
+
+        const orderIds = orders.map((o) => o.orderId);
+        const existing = await prisma.order.findMany({
+          where: { source: 'tiktok', orderId: { in: orderIds } },
+          select: { orderId: true },
+        });
+        const existingSet = new Set(existing.map((o) => o.orderId));
+
+        let updated = 0;
+        const notFoundIds: string[] = [];
+
+        if (!dryRun) {
+          for (const row of orders) {
+            if (!existingSet.has(row.orderId)) {
+              notFoundIds.push(row.orderId);
+              continue;
+            }
+            await prisma.order.update({
+              where: { orderId_source: { orderId: row.orderId, source: 'tiktok' } },
+              data: {
+                settlementAmount: row.settlementAmount,
+                commissionFee: row.commissionFee,
+                serviceFee: row.serviceFee,
+                partnerCommission: row.partnerCommission,
+              },
+            });
+            updated++;
+          }
+        }
+
+        const matched = orders.filter((o) => existingSet.has(o.orderId)).length;
+        const notFound = orders.length - matched;
+
+        return res.status(200).json({
+          message: dryRun
+            ? 'Pré-visualização concluída.'
+            : `Liquidação TikTok aplicada em ${updated} pedido(s).`,
+          dryRun,
+          rawRows,
+          orderRows,
+          ordersInFile: orders.length,
+          matched,
+          notFound,
+          updated: dryRun ? 0 : updated,
+          notFoundSample: notFoundIds.slice(0, 20),
+          preview: dryRun
+            ? orders.slice(0, 10).map((o) => ({
+                orderId: o.orderId,
+                settlementAmount: o.settlementAmount,
+                commissionFee: o.commissionFee,
+                serviceFee: o.serviceFee,
+                partnerCommission: o.partnerCommission,
+                exists: existingSet.has(o.orderId),
+              }))
+            : undefined,
+        });
+      } catch (e) {
+        console.error(e);
+        return res.status(500).json({ message: 'Erro ao importar income TikTok.' });
+      }
+    });
   });
 
   // Taxas por tipo de pagamento (Tray)
@@ -2152,7 +2448,14 @@ async function main() {
 
       const tiktokFees = isTrayChannelFilter || channel === 'shopee' ? 0 : orders
         .filter((o) => o.source === 'tiktok')
-        .reduce((s, o) => s + (o.commissionFee || 0) + (o.serviceFee || 0), 0);
+        .reduce(
+          (s, o) =>
+            s +
+            (o.commissionFee || 0) +
+            (o.serviceFee || 0) +
+            ((o as { partnerCommission?: number | null }).partnerCommission || 0),
+          0,
+        );
 
       const trayOrders = orders.filter((o) => isTrayOrderSource(o.source));
 
@@ -2230,10 +2533,7 @@ async function main() {
         ? await prisma.order.findMany({
             where: {
               orderDate: { gte: monthStart, lt: monthEnd },
-              NOT: [
-                { status: { contains: 'ancelado', mode: 'insensitive' } },
-                { status: { contains: 'Não pago', mode: 'insensitive' } },
-              ],
+              NOT: [...ORDER_STATUS_EXCLUDED_FROM_SALES_METRICS],
             },
           })
         : orders;
@@ -2437,6 +2737,8 @@ async function main() {
         const status = String(o.status || '').toLowerCase();
         if (status.includes('cancelado')) continue;
         if (status.includes('não pago') || status.includes('nao pago')) continue;
+        if (status.includes('aguardando pagamento')) continue;
+        if (status === 'devolvido') continue;
         const d = new Date(o.orderDate);
         const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
         const ch = String(o.source || '').toLowerCase();
@@ -2516,11 +2818,7 @@ app.get('/api/dashboard', async (_req, res) => {
     // 1. Busca vendas válidas
     const sales = await prisma.order.findMany({
       where: {
-        NOT: [
-          { status: { contains: 'Cancelado' } },
-          { status: { contains: 'Não pago' } },
-          { status: 'Devolvido' },
-        ]
+        NOT: [...ORDER_STATUS_EXCLUDED_FROM_SALES_METRICS],
       },
       orderBy: { orderDate: 'asc' }
     });
@@ -2545,13 +2843,11 @@ app.get('/api/dashboard', async (_req, res) => {
           tiktok: 0,
           trayAtacado: 0,
           trayVarejo: 0,
-          trayLegacy: 0,
           total: 0,
           shopeeCount: 0,
           tiktokCount: 0,
           trayAtacadoCount: 0,
           trayVarejoCount: 0,
-          trayLegacyCount: 0,
           totalCount: 0,
         };
       }
@@ -2565,15 +2861,13 @@ app.get('/api/dashboard', async (_req, res) => {
       }
       if (isTrayOrderSource(source)) {
         const b = bucketTrayMetrics(source, sale.orderId);
-        if (b === 'trayAtacado') {
-          salesByMonth[monthYear].trayAtacado += amount;
-          salesByMonth[monthYear].trayAtacadoCount += 1;
-        } else if (b === 'trayVarejo') {
+        if (b === 'trayVarejo') {
           salesByMonth[monthYear].trayVarejo += amount;
           salesByMonth[monthYear].trayVarejoCount += 1;
         } else {
-          salesByMonth[monthYear].trayLegacy += amount;
-          salesByMonth[monthYear].trayLegacyCount += 1;
+          // trayAtacado + trayLegacy (sem série legado nas métricas)
+          salesByMonth[monthYear].trayAtacado += amount;
+          salesByMonth[monthYear].trayAtacadoCount += 1;
         }
       }
       salesByMonth[monthYear].total += amount;
@@ -2590,11 +2884,7 @@ app.get('/api/dashboard', async (_req, res) => {
     const orderItems = await prisma.orderItem.findMany({
       where: {
         order: {
-          NOT: [
-            { status: { contains: 'Cancelado' } },
-            { status: { contains: 'Não pago' } },
-            { status: 'Devolvido' },
-          ],
+          NOT: [...ORDER_STATUS_EXCLUDED_FROM_SALES_METRICS],
         },
       },
       include: { product: true },
@@ -2658,11 +2948,7 @@ app.get('/api/dashboard', async (_req, res) => {
           ...dateFilter,
           order: {
             ...(dateFilter.order || {}),
-            NOT: [
-              { status: { contains: 'Cancelado' } },
-              { status: { contains: 'Não pago' } },
-              { status: 'Devolvido' },
-            ],
+            NOT: [...ORDER_STATUS_EXCLUDED_FROM_SALES_METRICS],
           },
         },
         include: {
@@ -2727,22 +3013,33 @@ app.get('/api/dashboard', async (_req, res) => {
     }
   });
 
-  // Vendas por dia por canal: GET /api/sales-by-day?month=2026-02
+  // Vendas por dia por canal: GET /api/sales-by-day?month=2026-02 | ?start=YYYY-MM-DD&end=YYYY-MM-DD
   app.get('/api/sales-by-day', async (req, res) => {
     try {
-      const monthStr = String(req.query.month ?? '').trim();
-      const monthStart = monthStr ? monthStartFromYYYYMM(monthStr) : null;
-      const start = monthStart || new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-      const end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+      const startQ = String(req.query.start ?? '').trim();
+      const endQ = String(req.query.end ?? '').trim();
+      let start: Date;
+      let end: Date;
+
+      if (startQ && endQ) {
+        const ds = dateStartFromYYYYMMDD(startQ);
+        const de = dateStartFromYYYYMMDD(endQ);
+        if (!ds || !de || ds > de) {
+          return res.status(400).json({ message: 'Parâmetros start e end devem ser YYYY-MM-DD com início ≤ fim.' });
+        }
+        start = ds;
+        end = new Date(de.getFullYear(), de.getMonth(), de.getDate() + 1);
+      } else {
+        const monthStr = String(req.query.month ?? '').trim();
+        const monthStart = monthStr ? monthStartFromYYYYMM(monthStr) : null;
+        start = monthStart || new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+        end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+      }
 
       const orders = await prisma.order.findMany({
         where: {
           orderDate: { gte: start, lt: end },
-          NOT: [
-            { status: { contains: 'ancelado', mode: 'insensitive' } },
-            { status: { contains: 'Não pago', mode: 'insensitive' } },
-            { status: 'Devolvido' },
-          ],
+          NOT: [...ORDER_STATUS_EXCLUDED_FROM_SALES_METRICS],
         },
         select: { orderDate: true, source: true, totalPrice: true, orderId: true },
       });
@@ -2752,13 +3049,11 @@ app.get('/api/dashboard', async (_req, res) => {
         tiktok: number;
         trayAtacado: number;
         trayVarejo: number;
-        trayLegacy: number;
         total: number;
         shopeeOrders: number;
         tiktokOrders: number;
         trayAtacadoOrders: number;
         trayVarejoOrders: number;
-        trayLegacyOrders: number;
         totalOrders: number;
       };
       const emptyDay = (): DayAgg => ({
@@ -2766,13 +3061,11 @@ app.get('/api/dashboard', async (_req, res) => {
         tiktok: 0,
         trayAtacado: 0,
         trayVarejo: 0,
-        trayLegacy: 0,
         total: 0,
         shopeeOrders: 0,
         tiktokOrders: 0,
         trayAtacadoOrders: 0,
         trayVarejoOrders: 0,
-        trayLegacyOrders: 0,
         totalOrders: 0,
       });
 
@@ -2803,15 +3096,13 @@ app.get('/api/dashboard', async (_req, res) => {
           byDay[key].tiktokOrders += 1;
         } else if (isTrayOrderSource(o.source)) {
           const b = bucketTrayMetrics(o.source, o.orderId);
-          if (b === 'trayAtacado') {
-            byDay[key].trayAtacado += amt;
-            byDay[key].trayAtacadoOrders += 1;
-          } else if (b === 'trayVarejo') {
+          if (b === 'trayVarejo') {
             byDay[key].trayVarejo += amt;
             byDay[key].trayVarejoOrders += 1;
           } else {
-            byDay[key].trayLegacy += amt;
-            byDay[key].trayLegacyOrders += 1;
+            // trayAtacado + trayLegacy agregados em Tray Atacado nas métricas
+            byDay[key].trayAtacado += amt;
+            byDay[key].trayAtacadoOrders += 1;
           }
         }
       }
@@ -2822,8 +3113,8 @@ app.get('/api/dashboard', async (_req, res) => {
           date: k,
           name: new Date(k + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
           ...b,
-          tray: b.trayAtacado + b.trayVarejo + b.trayLegacy,
-          trayOrders: b.trayAtacadoOrders + b.trayVarejoOrders + b.trayLegacyOrders,
+          tray: b.trayAtacado + b.trayVarejo,
+          trayOrders: b.trayAtacadoOrders + b.trayVarejoOrders,
         };
       });
 

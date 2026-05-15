@@ -326,7 +326,7 @@ export default function Products() {
                     <option value="all">Todos canais</option>
                     <option value="shopee">Shopee</option>
                     <option value="tiktok">TikTok</option>
-                    <option value="tray">Tray (legado)</option>
+                    <option value="tray">Tray</option>
                     <option value="tray_atacado">Tray Atacado</option>
                     <option value="tray_varejo">Tray Varejo</option>
                   </select>
