@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 
 import { API_URL } from './config';
 
@@ -53,30 +53,14 @@ type ProductionCostDetail = {
   totalCost: number;
 };
 
-type GrossRevenueItem = {
-  productCode: string;
-  name: string;
-  quantity: number;
-  unitPrice: number;
-  lineTotal: number;
-};
-
-type GrossRevenueOrder = {
-  orderId: string;
-  source: string;
-  orderDate: string;
-  totalPrice: number;
-  unitsInOrder: number;
-  items: GrossRevenueItem[];
-};
-
-type GrossRevenueDetail = {
-  month: string;
+export type GrossRevenueNavParams = {
+  startMonth: string;
+  endMonth: string;
   channel: string;
-  orders: GrossRevenueOrder[];
-  totalOrders: number;
-  totalProductUnits: number;
-  faturamentoBruto: number;
+};
+
+type SimulationProps = {
+  onOpenGrossRevenue?: (params: GrossRevenueNavParams) => void;
 };
 
 function cn(...classes: Array<string | false | undefined | null>) {
@@ -90,12 +74,6 @@ const UI = {
 
 function fmtMoney(v: number) {
   return Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
-
-function fmtDate(iso: string) {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 function monthToDate(m: string) {
@@ -140,16 +118,15 @@ const channelLabel: Record<string, string> = {
   tray_varejo: "Tray Varejo",
 };
 
-export default function Simulation(): JSX.Element {
+export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX.Element {
   const [baseData, setBaseData] = useState<SimulationData | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
-  const [detailKind, setDetailKind] = useState<null | "custo" | "faturamento">(null);
+  const [detailKind, setDetailKind] = useState<null | "custo">(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [custoDetail, setCustoDetail] = useState<ProductionCostDetail | null>(null);
-  const [fatDetail, setFatDetail] = useState<GrossRevenueDetail | null>(null);
 
   const now = new Date();
   const defaultMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -231,7 +208,7 @@ export default function Simulation(): JSX.Element {
         qs.set("channel", channel);
         const res = await fetch(`${API_URL}/api/simulation?${qs.toString()}`);
         const json = await res.json();
-        if (!res.ok) throw new Error(json?.message || "Falha ao carregar simulação.");
+        if (!res.ok) throw new Error(json?.message || "Falha ao carregar simulaÃ§Ã£o.");
         results.push(json as SimulationData);
       }
 
@@ -257,7 +234,7 @@ export default function Simulation(): JSX.Element {
         const pct = (v: number) => (faturamentoBruto > 0 ? (v / faturamentoBruto) * 100 : 0);
 
         setBaseData({
-          month: `${monthRange.start} → ${monthRange.end}`,
+          month: `${monthRange.start} â†’ ${monthRange.end}`,
           channel,
           faturamentoBruto,
           adsInvestimento,
@@ -299,7 +276,15 @@ export default function Simulation(): JSX.Element {
     setDetailKind(null);
     setDetailError("");
     setCustoDetail(null);
-    setFatDetail(null);
+  }
+
+  function openGrossRevenueScreen() {
+    if (!onOpenGrossRevenue) return;
+    onOpenGrossRevenue({
+      startMonth: monthRange.start,
+      endMonth: monthRange.end,
+      channel,
+    });
   }
 
   async function openCustoDetail() {
@@ -314,29 +299,8 @@ export default function Simulation(): JSX.Element {
       qs.set("channel", channel);
       const res = await fetch(`${API_URL}/api/simulation/production-cost?${qs.toString()}`);
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || "Falha ao carregar custo de produção.");
+      if (!res.ok) throw new Error(json?.message || "Falha ao carregar custo de produÃ§Ã£o.");
       setCustoDetail(json as ProductionCostDetail);
-    } catch (e: any) {
-      setDetailError(e.message || "Erro ao carregar.");
-    } finally {
-      setDetailLoading(false);
-    }
-  }
-
-  async function openFaturamentoDetail() {
-    if (isMultiMonth) return;
-    setDetailKind("faturamento");
-    setDetailLoading(true);
-    setDetailError("");
-    setFatDetail(null);
-    try {
-      const qs = new URLSearchParams();
-      qs.set("month", startMonth);
-      qs.set("channel", channel);
-      const res = await fetch(`${API_URL}/api/simulation/gross-revenue?${qs.toString()}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || "Falha ao carregar faturamento.");
-      setFatDetail(json as GrossRevenueDetail);
     } catch (e: any) {
       setDetailError(e.message || "Erro ao carregar.");
     } finally {
@@ -357,12 +321,12 @@ export default function Simulation(): JSX.Element {
         <div className={cn(UI.card, "p-6")}>
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:flex-wrap">
             <div className="flex-1 min-w-0">
-              <h2 className="text-lg font-black tracking-tight text-slate-900">Simulação P&L</h2>
+              <h2 className="text-lg font-black tracking-tight text-slate-900">SimulaÃ§Ã£o P&L</h2>
             </div>
             <div className="flex flex-wrap items-end gap-3">
               <div>
                 <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
-                  Mês inicial
+                  MÃªs inicial
                 </label>
                 <input
                   type="month"
@@ -373,7 +337,7 @@ export default function Simulation(): JSX.Element {
               </div>
               <div>
                 <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
-                  Mês final
+                  MÃªs final
                 </label>
                 <input
                   type="month"
@@ -410,22 +374,22 @@ export default function Simulation(): JSX.Element {
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="text-xs font-semibold text-slate-600">
-              Período:{" "}
+              PerÃ­odo:{" "}
               <span className="font-extrabold text-slate-900">
                 {monthRange.start}
               </span>{" "}
               {monthRange.start !== monthRange.end ? (
                 <>
-                  <span className="text-slate-400">→</span>{" "}
+                  <span className="text-slate-400">â†’</span>{" "}
                   <span className="font-extrabold text-slate-900">{monthRange.end}</span>{" "}
-                  <span className="text-slate-400">·</span>{" "}
+                  <span className="text-slate-400">Â·</span>{" "}
                   <span className="font-bold text-slate-700">{monthsInRange.length} meses</span>
                 </>
               ) : null}
             </div>
             {isMultiMonth ? (
               <div className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                Detalhes (pedidos / custo de produção) disponíveis apenas para 1 mês.
+                Detalhe de custo de produÃ§Ã£o disponÃ­vel apenas para 1 mÃªs.
               </div>
             ) : null}
           </div>
@@ -447,7 +411,7 @@ export default function Simulation(): JSX.Element {
             >
               <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 bg-slate-50">
                 <h3 id="sim-detail-title" className="text-sm font-extrabold text-slate-900">
-                  {detailKind === "custo" ? "Custo de produção — detalhe" : "Faturamento bruto — pedidos"}
+                  Custo de produÃ§Ã£o â€” detalhe
                 </h3>
                 <button
                   type="button"
@@ -464,7 +428,7 @@ export default function Simulation(): JSX.Element {
                 {!detailLoading && !detailError && detailKind === "custo" && custoDetail && (
                   <div className="space-y-4">
                     <p className="text-xs text-slate-500">
-                      {custoDetail.month} — {channelLabel[custoDetail.channel] || custoDetail.channel}
+                      {custoDetail.month} â€” {channelLabel[custoDetail.channel] || custoDetail.channel}
                     </p>
                     <div className="overflow-auto rounded-xl border border-slate-200">
                       <table className="w-full min-w-[520px] text-sm">
@@ -493,7 +457,7 @@ export default function Simulation(): JSX.Element {
                           {custoDetail.lines.length === 0 && (
                             <tr>
                               <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
-                                Nenhuma linha de pedido no período.
+                                Nenhuma linha de pedido no perÃ­odo.
                               </td>
                             </tr>
                           )}
@@ -512,79 +476,6 @@ export default function Simulation(): JSX.Element {
                     </div>
                   </div>
                 )}
-                {!detailLoading && !detailError && detailKind === "faturamento" && fatDetail && (
-                  <div className="space-y-4">
-                    <p className="text-xs text-slate-500">
-                      {fatDetail.month} — {channelLabel[fatDetail.channel] || fatDetail.channel}
-                    </p>
-                    <div className="space-y-4">
-                      {fatDetail.orders.map((o) => (
-                        <div
-                          key={`${o.source}-${o.orderId}`}
-                          className="rounded-xl border border-slate-200 bg-white overflow-hidden"
-                        >
-                          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-slate-100 bg-slate-50/80 px-3 py-2">
-                            <div className="text-sm">
-                              <span className="font-extrabold text-slate-900">Pedido {o.orderId}</span>
-                              <span className="mx-2 text-slate-300">·</span>
-                              <span className="font-semibold text-slate-600">{o.source}</span>
-                              <span className="mx-2 text-slate-300">·</span>
-                              <span className="text-slate-600">{fmtDate(o.orderDate)}</span>
-                            </div>
-                            <div className="text-sm text-right">
-                              <span className="text-slate-500">Valor: </span>
-                              <span className="font-extrabold text-slate-900">{fmtMoney(o.totalPrice)}</span>
-                              <span className="mx-2 text-slate-300">·</span>
-                              <span className="text-slate-500">Unid.: </span>
-                              <span className="font-bold text-slate-800">{o.unitsInOrder}</span>
-                            </div>
-                          </div>
-                          <div className="overflow-x-auto">
-                            <table className="w-full min-w-[400px] text-xs sm:text-sm">
-                              <thead className="bg-slate-50 text-left text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
-                                <tr>
-                                  <th className="px-3 py-2">Produto</th>
-                                  <th className="px-3 py-2 text-right">Qtd</th>
-                                  <th className="px-3 py-2 text-right">Unit.</th>
-                                  <th className="px-3 py-2 text-right">Total linha</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                {o.items.map((it, i) => (
-                                  <tr key={`${it.productCode}-${i}`}>
-                                    <td className="px-3 py-1.5 text-slate-800">{it.name}</td>
-                                    <td className="px-3 py-1.5 text-right font-semibold tabular-nums">{it.quantity}</td>
-                                    <td className="px-3 py-1.5 text-right tabular-nums">{fmtMoney(it.unitPrice)}</td>
-                                    <td className="px-3 py-1.5 text-right font-semibold tabular-nums">
-                                      {fmtMoney(it.lineTotal)}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      ))}
-                      {fatDetail.orders.length === 0 && (
-                        <p className="text-sm text-slate-500 text-center py-8">Nenhum pedido no período.</p>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap gap-6 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3 text-sm">
-                      <div>
-                        <span className="text-emerald-800/80">Pedidos: </span>
-                        <span className="font-extrabold text-emerald-950">{fatDetail.totalOrders}</span>
-                      </div>
-                      <div>
-                        <span className="text-emerald-800/80">Total de unidades (produtos): </span>
-                        <span className="font-extrabold text-emerald-950">{fatDetail.totalProductUnits}</span>
-                      </div>
-                      <div>
-                        <span className="text-emerald-800/80">Faturamento bruto: </span>
-                        <span className="font-extrabold text-emerald-950">{fmtMoney(fatDetail.faturamentoBruto)}</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
           </div>
@@ -594,7 +485,7 @@ export default function Simulation(): JSX.Element {
           <div className={cn(UI.card, "overflow-hidden")}>
             <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
               <h3 className="text-sm font-extrabold tracking-wide text-slate-900">
-                {data.month} — {channelLabel[data.channel] || data.channel}
+                {data.month} â€” {channelLabel[data.channel] || data.channel}
               </h3>
             </div>
             <div className="p-6">
@@ -604,15 +495,15 @@ export default function Simulation(): JSX.Element {
                     <td className="py-2 pr-4">
                       <button
                         type="button"
-                        onClick={openFaturamentoDetail}
-                        disabled={isMultiMonth}
-                        className="text-left font-semibold text-slate-900 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-600"
+                        onClick={openGrossRevenueScreen}
+                        disabled={!onOpenGrossRevenue}
+                        className="text-left font-semibold text-slate-900 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-600 disabled:no-underline disabled:text-slate-600 disabled:cursor-default"
                       >
                         Faturamento Bruto
                       </button>
                     </td>
                     <td className="py-2 text-right font-extrabold text-slate-900">{fmtMoney(data.faturamentoBruto)}</td>
-                    <td className="py-2 w-16 text-right text-slate-500">—</td>
+                    <td className="py-2 w-16 text-right text-slate-500">â€”</td>
                   </tr>
                   <tr className="border-b border-slate-100">
                     <td className="py-2 pr-4 text-slate-700">
@@ -668,7 +559,7 @@ export default function Simulation(): JSX.Element {
                           onChange={() => toggleInclude("taxasCartaoPix")}
                           className="h-4 w-4 rounded border-slate-300"
                         />
-                        <span>(-) Taxas Cartão/PIX</span>
+                        <span>(-) Taxas CartÃ£o/PIX</span>
                       </label>
                     </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.taxasCartaoPix)}</td>
@@ -705,7 +596,7 @@ export default function Simulation(): JSX.Element {
                             className="h-4 w-4 rounded border-slate-300"
                             onClick={(e) => e.stopPropagation()}
                           />
-                          <span>(-) Custo de Produção</span>
+                          <span>(-) Custo de ProduÃ§Ã£o</span>
                         </span>
                       </button>
                     </td>
@@ -743,7 +634,7 @@ export default function Simulation(): JSX.Element {
                     <td className="py-2 text-right text-slate-500">{data.impostoPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="bg-emerald-50">
-                    <td className="py-3 pr-4 font-extrabold text-slate-900">(=) Lucro Líquido Final</td>
+                    <td className="py-3 pr-4 font-extrabold text-slate-900">(=) Lucro LÃ­quido Final</td>
                     <td className="py-3 text-right font-black text-slate-900">{fmtMoney(data.lucroLiquido)}</td>
                     <td className="py-3"></td>
                   </tr>

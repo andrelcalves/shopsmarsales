@@ -26,6 +26,7 @@ model Order {
   serviceFee    Float?  // Taxa de serviço bruta
   settlementAmount  Float?  // Valor liquidado (relatório income TikTok)
   partnerCommission Float?  // Comissões afiliados/criadores/agências (income TikTok)
+  paymentId         String? @default("")  // ID do pagamento (income TikTok)
   freight       Float?  // Frete (apenas canal tray)
   paymentType   String? @default("")  // Tipo de pagamento (ex: Pix - Vindi, Cartão de Crédito - Mercado Pago)
   @@unique([orderId, source])
@@ -53,7 +54,9 @@ model OrderItem {
   productCode String
   name        String
   unitPrice   Float
-  discount    Float?   @default(0)  // Desconto dado pela loja no produto
+  discount    Float?   @default(0)  // Desconto total do item (legado / soma)
+  sellerDiscount   Float?   @default(0)
+  platformDiscount Float?   @default(0)
   quantity    Int
   totalPrice  Float
 

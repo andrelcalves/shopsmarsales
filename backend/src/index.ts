@@ -232,6 +232,8 @@ interface StandardizedShopeeItem {
   quantity: number;
   totalPrice: number;
   discount: number | null;
+  sellerDiscount: number;
+  platformDiscount: number;
 }
 
 function standardizeShopeeRow(row: Record<string, unknown>): StandardizedShopeeItem | null {
@@ -265,10 +267,12 @@ function standardizeShopeeRow(row: Record<string, unknown>): StandardizedShopeeI
     const quantity = qtyVal ? parseInt(String(qtyVal), 10) || 0 : 0;
     const totalPrice = parseBrNumber(priceVal);
     const unitPrice = unitPriceVal != null ? parseBrNumber(unitPriceVal) : (quantity > 0 ? totalPrice / quantity : 0);
+    const sellerDiscount = Math.abs(parseBrNumber(sellerDiscVal));
+    const platformDiscount = Math.abs(parseBrNumber(platformDiscVal));
     const discount = discountVal != null
-      ? parseBrNumber(discountVal)
-      : (platformDiscVal != null || sellerDiscVal != null)
-        ? (parseBrNumber(platformDiscVal) || 0) + (parseBrNumber(sellerDiscVal) || 0) || null
+      ? Math.abs(parseBrNumber(discountVal))
+      : sellerDiscount + platformDiscount > 0
+        ? sellerDiscount + platformDiscount
         : null;
     const commissionFee = commissionVal != null ? parseBrNumber(commissionVal) : null;
     const serviceFee = serviceVal != null ? parseBrNumber(serviceVal) : null;
@@ -290,6 +294,8 @@ function standardizeShopeeRow(row: Record<string, unknown>): StandardizedShopeeI
       quantity,
       totalPrice,
       discount,
+      sellerDiscount,
+      platformDiscount,
     };
   } catch (e) {
     console.error('Erro ao padronizar linha Shopee:', e);
@@ -384,8 +390,9 @@ interface StandardizedTiktokItem {
   quantity: number;
   totalPrice: number;
   discount: number | null;
+  sellerDiscount: number;
+  platformDiscount: number;
 }
-
 
 function standardizeTiktokRow(row: Record<string, unknown>): StandardizedTiktokItem | null {
   try {
@@ -412,7 +419,10 @@ function standardizeTiktokRow(row: Record<string, unknown>): StandardizedTiktokI
     const quantity = qtyVal ? parseInt(String(qtyVal), 10) || 0 : 0;
     const unitPrice = parseBrNumber(unitPriceVal);
     const totalPrice = parseBrNumber(subtotalAfterVal);
-    const discount = (parseBrNumber(platformDiscountVal) || 0) + (parseBrNumber(sellerDiscountVal) || 0) || null;
+    const sellerDiscount = Math.abs(parseBrNumber(sellerDiscountVal));
+    const platformDiscount = Math.abs(parseBrNumber(platformDiscountVal));
+    const discount =
+      sellerDiscount + platformDiscount > 0 ? sellerDiscount + platformDiscount : null;
 
     if (!orderId || !orderDate || isNaN(orderDate.getTime())) return null;
 
@@ -426,6 +436,8 @@ function standardizeTiktokRow(row: Record<string, unknown>): StandardizedTiktokI
       quantity,
       totalPrice,
       discount: discount !== null && discount > 0 ? discount : null,
+      sellerDiscount,
+      platformDiscount,
     };
   } catch (e) {
     console.error('Erro ao padronizar linha TikTok:', e);
@@ -488,6 +500,109 @@ function buildSimulationOrderWhere(monthStart: Date, channelRaw: string): any {
     }
   }
   return orderWhere;
+}
+
+function buildSimulationOrderWhereRange(
+  monthStart: Date,
+  monthEndInclusive: Date,
+  channelRaw: string,
+): any {
+  const channel = String(channelRaw || 'all').trim().toLowerCase();
+  const rangeEnd = new Date(monthEndInclusive.getFullYear(), monthEndInclusive.getMonth() + 1, 1);
+  const orderWhere: any = {
+    orderDate: { gte: monthStart, lt: rangeEnd },
+    NOT: [...ORDER_STATUS_EXCLUDED_FROM_SALES_METRICS],
+  };
+  if (channel !== 'all') {
+    if (channel === 'tray') {
+      orderWhere.source = { in: [...TRAY_ORDER_SOURCES_LIST] };
+    } else {
+      orderWhere.source = channel;
+    }
+  }
+  return orderWhere;
+}
+
+function roundMoney(n: number): number {
+  return Math.round(Number(n || 0) * 100) / 100;
+}
+
+function mapOrderToGrossRevenueRow(o: {
+  orderId: string;
+  source: string;
+  orderDate: Date;
+  status: string;
+  totalPrice: number | null;
+  commissionFee: number | null;
+  serviceFee: number | null;
+  partnerCommission?: number | null;
+  settlementAmount?: number | null;
+  paymentId?: string | null;
+  items: Array<{
+    productCode: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    totalPrice: number;
+    discount: number | null;
+    sellerDiscount?: number | null;
+    platformDiscount?: number | null;
+  }>;
+}) {
+  const items = o.items.map((i) => {
+    const qty = i.quantity || 0;
+    const unit = Number(i.unitPrice || 0);
+    const sellerDisc = roundMoney(
+      Number(i.sellerDiscount ?? 0) > 0
+        ? Math.abs(Number(i.sellerDiscount))
+        : Number(i.discount ?? 0) > 0 && Number(i.platformDiscount ?? 0) === 0
+          ? Math.abs(Number(i.discount))
+          : 0,
+    );
+    return {
+      productCode: i.productCode,
+      name: i.name,
+      quantity: qty,
+      unitPrice: roundMoney(unit),
+      lineGross: roundMoney(unit * qty),
+      sellerDiscount: sellerDisc,
+      lineTotal: roundMoney(Number(i.totalPrice || 0)),
+    };
+  });
+
+  const grossProductSales = roundMoney(items.reduce((s, it) => s + it.lineGross, 0));
+  const sellerDiscount = roundMoney(items.reduce((s, it) => s + it.sellerDiscount, 0));
+  const commissionFee = roundMoney(Math.abs(Number(o.commissionFee || 0)));
+  const serviceFee = roundMoney(Math.abs(Number(o.serviceFee || 0)));
+  const partnerCommission = roundMoney(Math.abs(Number(o.partnerCommission || 0)));
+  const totalFees = roundMoney(commissionFee + serviceFee + partnerCommission);
+  const orderTotal = roundMoney(Number(o.totalPrice || 0));
+  const amountReceived =
+    o.settlementAmount != null && Number(o.settlementAmount) > 0
+      ? roundMoney(Number(o.settlementAmount))
+      : null;
+  const amountToReceive = roundMoney(Math.max(0, orderTotal - totalFees));
+  const isSettled = amountReceived != null;
+  const paymentId = String(o.paymentId ?? '').trim() || null;
+
+  return {
+    orderId: o.orderId,
+    source: o.source,
+    orderDate: o.orderDate.toISOString(),
+    status: o.status || '',
+    paymentId,
+    grossProductSales,
+    sellerDiscount,
+    commissionFee,
+    serviceFee,
+    partnerCommission,
+    amountToReceive,
+    amountReceived,
+    isSettled,
+    orderTotal,
+    items,
+    unitsInOrder: items.reduce((s, it) => s + it.quantity, 0),
+  };
 }
 
 const standardizeData = (row: Record<string, unknown>, source: string): StandardizedSale | null => {
@@ -965,6 +1080,8 @@ async function main() {
                   quantity: r.quantity,
                   totalPrice: r.totalPrice,
                   discount: r.discount,
+                  sellerDiscount: r.sellerDiscount,
+                  platformDiscount: r.platformDiscount,
                   productId,
                 },
                 create: {
@@ -976,6 +1093,8 @@ async function main() {
                   quantity: r.quantity,
                   totalPrice: r.totalPrice,
                   discount: r.discount ?? 0,
+                  sellerDiscount: r.sellerDiscount,
+                  platformDiscount: r.platformDiscount,
                   productId,
                 },
               })
@@ -1060,6 +1179,8 @@ async function main() {
                   quantity: r.quantity,
                   totalPrice: r.totalPrice,
                   discount: r.discount,
+                  sellerDiscount: r.sellerDiscount,
+                  platformDiscount: r.platformDiscount,
                   productId,
                 },
                 create: {
@@ -1071,6 +1192,8 @@ async function main() {
                   quantity: r.quantity,
                   totalPrice: r.totalPrice,
                   discount: r.discount ?? 0,
+                  sellerDiscount: r.sellerDiscount,
+                  platformDiscount: r.platformDiscount,
                   productId,
                 },
               })
@@ -1617,6 +1740,7 @@ async function main() {
                 commissionFee: row.commissionFee,
                 serviceFee: row.serviceFee,
                 partnerCommission: row.partnerCommission,
+                paymentId: row.paymentId || '',
               },
             });
             updated++;
@@ -1641,6 +1765,7 @@ async function main() {
           preview: dryRun
             ? orders.slice(0, 10).map((o) => ({
                 orderId: o.orderId,
+                paymentId: o.paymentId,
                 settlementAmount: o.settlementAmount,
                 commissionFee: o.commissionFee,
                 serviceFee: o.serviceFee,
@@ -2660,50 +2785,69 @@ async function main() {
 
   // Detalhe do faturamento bruto da simulação (pedidos e itens)
   // GET /api/simulation/gross-revenue?month=2026-01&channel=all
+  // GET /api/simulation/gross-revenue?start=2026-01&end=2026-05&channel=tiktok
   app.get('/api/simulation/gross-revenue', async (req, res) => {
     try {
-      const monthStr = String(req.query.month ?? '').trim();
       const channel = String(req.query.channel ?? 'all').trim().toLowerCase();
-      const monthStart = monthStartFromYYYYMM(monthStr);
-      if (!monthStart) return res.status(400).json({ message: 'Parâmetro month inválido (use YYYY-MM).' });
+      const startStr = String(req.query.start ?? req.query.month ?? '').trim();
+      const endStr = String(req.query.end ?? req.query.month ?? startStr).trim();
+      const monthStart = monthStartFromYYYYMM(startStr);
+      const monthEnd = monthStartFromYYYYMM(endStr);
+      if (!monthStart || !monthEnd) {
+        return res.status(400).json({ message: 'Parâmetros inválidos (use month=YYYY-MM ou start/end=YYYY-MM).' });
+      }
 
-      const orderWhere = buildSimulationOrderWhere(monthStart, channel);
+      const rangeStart =
+        monthStart.getTime() <= monthEnd.getTime() ? monthStart : monthEnd;
+      const rangeEnd =
+        monthStart.getTime() <= monthEnd.getTime() ? monthEnd : monthStart;
+
+      const orderWhere = buildSimulationOrderWhereRange(rangeStart, rangeEnd, channel);
       const orders = await prisma.order.findMany({
         where: orderWhere,
         include: { items: true },
         orderBy: [{ orderDate: 'desc' }, { orderId: 'desc' }],
       });
 
-      let totalProductUnits = 0;
-      const list = orders.map((o) => {
-        const items = o.items.map((i) => ({
-          productCode: i.productCode,
-          name: i.name,
-          quantity: i.quantity || 0,
-          unitPrice: Math.round(Number(i.unitPrice || 0) * 100) / 100,
-          lineTotal: Math.round(Number(i.totalPrice || 0) * 100) / 100,
-        }));
-        const unitsInOrder = items.reduce((s, it) => s + it.quantity, 0);
-        totalProductUnits += unitsInOrder;
-        return {
+      const list = orders.map((o) =>
+        mapOrderToGrossRevenueRow({
           orderId: o.orderId,
           source: o.source,
-          orderDate: o.orderDate.toISOString(),
-          totalPrice: Math.round(Number(o.totalPrice || 0) * 100) / 100,
-          unitsInOrder,
-          items,
-        };
-      });
+          orderDate: o.orderDate,
+          status: o.status,
+          totalPrice: o.totalPrice,
+          commissionFee: o.commissionFee,
+          serviceFee: o.serviceFee,
+          partnerCommission: (o as { partnerCommission?: number | null }).partnerCommission,
+          settlementAmount: (o as { settlementAmount?: number | null }).settlementAmount,
+          paymentId: (o as { paymentId?: string | null }).paymentId,
+          items: o.items,
+        }),
+      );
 
-      const faturamentoBruto = Math.round(list.reduce((s, o) => s + o.totalPrice, 0) * 100) / 100;
+      const faturamentoBruto = roundMoney(list.reduce((s, o) => s + o.orderTotal, 0));
+      const totalProductUnits = list.reduce((s, o) => s + o.unitsInOrder, 0);
 
       return res.status(200).json({
-        month: monthStr,
+        month: startStr === endStr ? startStr : `${startStr} → ${endStr}`,
+        startMonth: `${rangeStart.getFullYear()}-${String(rangeStart.getMonth() + 1).padStart(2, '0')}`,
+        endMonth: `${rangeEnd.getFullYear()}-${String(rangeEnd.getMonth() + 1).padStart(2, '0')}`,
         channel,
         orders: list,
         totalOrders: list.length,
         totalProductUnits,
         faturamentoBruto,
+        totals: {
+          grossProductSales: roundMoney(list.reduce((s, o) => s + o.grossProductSales, 0)),
+          sellerDiscount: roundMoney(list.reduce((s, o) => s + o.sellerDiscount, 0)),
+          commissionFee: roundMoney(list.reduce((s, o) => s + o.commissionFee, 0)),
+          serviceFee: roundMoney(list.reduce((s, o) => s + o.serviceFee, 0)),
+          partnerCommission: roundMoney(list.reduce((s, o) => s + o.partnerCommission, 0)),
+          amountToReceive: roundMoney(list.reduce((s, o) => s + o.amountToReceive, 0)),
+          amountReceived: roundMoney(
+            list.reduce((s, o) => s + (o.amountReceived ?? 0), 0),
+          ),
+        },
       });
     } catch (e) {
       console.error(e);

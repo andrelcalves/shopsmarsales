@@ -6,6 +6,7 @@ import AdsSpend from './AdsSpend';
 import AdsDashboard from './AdsDashboard';
 import Products from './Products';
 import Simulation from './Simulation';
+import SimulationGrossRevenue, { type GrossRevenueNavParams } from './SimulationGrossRevenue';
 import PaymentTypeFees from './PaymentTypeFees';
 import Stock from './Stock';
 import BillsToPay from './BillsToPay';
@@ -18,6 +19,7 @@ import ProductCurve from './ProductCurve';
 import Returns from './Returns';
 
 import { API_URL } from './config';
+import { parseApiJson } from './api';
 
 
 const UI = {
@@ -43,7 +45,8 @@ type OrderUploadSource = 'shopee' | 'tiktok' | 'tray' | 'tray_atacado' | 'tray_v
 
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'shopee_duplicates' | 'product_curve' | 'returns'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'simulation_gross_revenue' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'shopee_duplicates' | 'product_curve' | 'returns'>('upload');
+  const [grossRevenueParams, setGrossRevenueParams] = useState<GrossRevenueNavParams | null>(null);
 
   // --- LÓGICA DA TELA DE UPLOAD ---
   const [file, setFile] = useState<File | null>(null);
@@ -149,7 +152,11 @@ function App() {
         method: 'POST',
         body: formData,
       });
-      const data = await response.json();
+      const data = await parseApiJson<{
+        message?: string;
+        updated?: number;
+        notFound?: number;
+      }>(response);
 
       if (response.ok) {
         const nf = data.notFound ?? 0;
@@ -232,7 +239,9 @@ function App() {
                                       ? 'Precificação'
                                       : currentView === 'simulation'
                                         ? 'Simulação'
-                                        : currentView === 'shopee_integration'
+                                        : currentView === 'simulation_gross_revenue'
+                                          ? 'Faturamento bruto'
+                                          : currentView === 'shopee_integration'
                                           ? 'Integrações'
                                           : currentView === 'shopee_duplicates'
                                             ? 'Duplicatas Shopee'
@@ -294,6 +303,18 @@ function App() {
                   )}
                 >
                   Curva ABC
+                </button>
+                <button
+                  onClick={() => {
+                    setGrossRevenueParams(null);
+                    setCurrentView('simulation_gross_revenue');
+                  }}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'simulation_gross_revenue' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Faturamento bruto
                 </button>
               </div>
               {/* Cadastros */}
@@ -428,7 +449,23 @@ function App() {
       ) : currentView === 'pricing' ? (
         <Pricing />
       ) : currentView === 'simulation' ? (
-        <Simulation />
+        <Simulation
+          onOpenGrossRevenue={(params) => {
+            setGrossRevenueParams(params);
+            setCurrentView('simulation_gross_revenue');
+          }}
+        />
+      ) : currentView === 'simulation_gross_revenue' ? (
+        <SimulationGrossRevenue
+          initialParams={grossRevenueParams}
+          onBack={
+            grossRevenueParams
+              ? () => {
+                  setCurrentView('simulation');
+                }
+              : undefined
+          }
+        />
       ) : currentView === 'shopee_integration' ? (
         <ShopeeIntegration />
       ) : currentView === 'shopee_duplicates' ? (
@@ -559,9 +596,10 @@ function App() {
             <div>
               <h2 className="text-lg font-black tracking-tight text-slate-900">Income / Liquidação TikTok Shop</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Relatório de receitas exportado do TikTok (<span className="font-bold">.xlsx</span>, aba{' '}
-                <span className="font-bold">Detalhes do pedido</span>). Atualiza valor liquidado, taxas da plataforma e
-                comissões de parceiros nos pedidos já importados.
+                Apenas relatório de receitas do <span className="font-bold">TikTok Shop</span> (
+                <span className="font-bold">.xlsx</span>, aba <span className="font-bold">Detalhes do pedido</span>).
+                Arquivos da <span className="font-bold">Shopee</span> não são suportados aqui — use a importação de
+                pedidos Shopee (CSV) para taxas no pedido, ou Cadastro ADS para recargas da carteira.
               </p>
             </div>
 
