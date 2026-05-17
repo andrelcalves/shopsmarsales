@@ -577,11 +577,16 @@ function mapOrderToGrossRevenueRow(o: {
   const partnerCommission = roundMoney(Math.abs(Number(o.partnerCommission || 0)));
   const totalFees = roundMoney(commissionFee + serviceFee + partnerCommission);
   const orderTotal = roundMoney(Number(o.totalPrice || 0));
-  const amountReceived =
+  const settlementFromIncome =
     o.settlementAmount != null && Number(o.settlementAmount) > 0
       ? roundMoney(Number(o.settlementAmount))
       : null;
-  const amountToReceive = roundMoney(Math.max(0, orderTotal - totalFees));
+  const amountReceived = settlementFromIncome;
+  // Com income importado, o valor liquidado do TikTok é a referência (não total do CSV − taxas)
+  const amountToReceive =
+    settlementFromIncome != null
+      ? settlementFromIncome
+      : roundMoney(Math.max(0, orderTotal - totalFees));
   const isSettled = amountReceived != null;
   const paymentId = String(o.paymentId ?? '').trim() || null;
 
