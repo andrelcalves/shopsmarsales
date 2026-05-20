@@ -2673,7 +2673,12 @@ async function main() {
         : fixedCost;
 
       const tax = totalRevenue * (taxPercent / 100);
-      const profit = totalRevenue - adsSpend - shopeeFees - tiktokFees - cardPix - freight - productionCost - fixedCostProportional - tax;
+      const variableCosts =
+        adsSpend + shopeeFees + tiktokFees + cardPix + freight + productionCost + tax;
+      const contributionMargin = totalRevenue - variableCosts;
+      const contributionMarginPercent =
+        totalRevenue > 0 ? (contributionMargin / totalRevenue) * 100 : 0;
+      const profit = contributionMargin - fixedCostProportional;
       const margin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
 
       return res.status(200).json({
@@ -2696,6 +2701,8 @@ async function main() {
         custoFixoPercent: totalRevenue > 0 ? Number((fixedCostProportional / totalRevenue * 100).toFixed(2)) : 0,
         imposto: Number(tax.toFixed(2)),
         impostoPercent: taxPercent,
+        margemContribuicao: Number(contributionMargin.toFixed(2)),
+        margemContribuicaoPercent: Number(contributionMarginPercent.toFixed(2)),
         lucroLiquido: Number(profit.toFixed(2)),
         margemLucro: Number(margin.toFixed(2)),
       });

@@ -305,6 +305,15 @@ function App() {
                   Curva ABC
                 </button>
                 <button
+                  onClick={() => setCurrentView('simulation')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'simulation' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Simulação
+                </button>
+                <button
                   onClick={() => {
                     setGrossRevenueParams(null);
                     setCurrentView('simulation_gross_revenue');
@@ -384,15 +393,6 @@ function App() {
                   )}
                 >
                   Precificação
-                </button>
-                <button
-                  onClick={() => setCurrentView('simulation')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'simulation' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Simulação
                 </button>
                 <button
                   onClick={() => setCurrentView('shopee_integration')}

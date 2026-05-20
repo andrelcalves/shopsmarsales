@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import { API_URL } from './config';
 
@@ -22,6 +22,8 @@ type SimulationData = {
   custoFixoPercent: number;
   imposto: number;
   impostoPercent: number;
+  margemContribuicao: number;
+  margemContribuicaoPercent: number;
   lucroLiquido: number;
   margemLucro: number;
 };
@@ -162,9 +164,18 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
     const custoFixo = include.custoFixo ? Number(d.custoFixo || 0) : 0;
     const imposto = include.imposto ? Number(d.imposto || 0) : 0;
 
-    const totalDescontos =
-      adsInvestimento + taxasShopee + taxasTiktok + taxasCartaoPix + frete + custoProducao + custoFixo + imposto;
-    const lucroLiquido = faturamentoBruto - totalDescontos;
+    const custosVariaveis =
+      adsInvestimento +
+      taxasShopee +
+      taxasTiktok +
+      taxasCartaoPix +
+      frete +
+      custoProducao +
+      imposto;
+    const margemContribuicao = faturamentoBruto - custosVariaveis;
+    const margemContribuicaoPercent =
+      faturamentoBruto > 0 ? (margemContribuicao / faturamentoBruto) * 100 : 0;
+    const lucroLiquido = margemContribuicao - custoFixo;
     const margemLucro = faturamentoBruto > 0 ? (lucroLiquido / faturamentoBruto) * 100 : 0;
 
     const pct = (v: number) => (faturamentoBruto > 0 ? (v / faturamentoBruto) * 100 : 0);
@@ -187,6 +198,8 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
       custoFixoPercent: pct(custoFixo),
       imposto,
       impostoPercent: pct(imposto),
+      margemContribuicao,
+      margemContribuicaoPercent,
       lucroLiquido,
       margemLucro,
     };
@@ -208,7 +221,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
         qs.set("channel", channel);
         const res = await fetch(`${API_URL}/api/simulation?${qs.toString()}`);
         const json = await res.json();
-        if (!res.ok) throw new Error(json?.message || "Falha ao carregar simulaÃ§Ã£o.");
+        if (!res.ok) throw new Error(json?.message || "Falha ao carregar simulação.");
         results.push(json as SimulationData);
       }
 
@@ -226,15 +239,24 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
         const custoFixo = sum("custoFixo");
         const imposto = sum("imposto");
 
-        const lucroLiquido =
-          faturamentoBruto -
-          (adsInvestimento + taxasShopee + taxasTiktok + taxasCartaoPix + frete + custoProducao + custoFixo + imposto);
+        const custosVariaveis =
+          adsInvestimento +
+          taxasShopee +
+          taxasTiktok +
+          taxasCartaoPix +
+          frete +
+          custoProducao +
+          imposto;
+        const margemContribuicao = faturamentoBruto - custosVariaveis;
+        const margemContribuicaoPercent =
+          faturamentoBruto > 0 ? (margemContribuicao / faturamentoBruto) * 100 : 0;
+        const lucroLiquido = margemContribuicao - custoFixo;
         const margemLucro = faturamentoBruto > 0 ? (lucroLiquido / faturamentoBruto) * 100 : 0;
 
         const pct = (v: number) => (faturamentoBruto > 0 ? (v / faturamentoBruto) * 100 : 0);
 
         setBaseData({
-          month: `${monthRange.start} â†’ ${monthRange.end}`,
+          month: `${monthRange.start} → ${monthRange.end}`,
           channel,
           faturamentoBruto,
           adsInvestimento,
@@ -253,6 +275,8 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
           custoFixoPercent: pct(custoFixo),
           imposto,
           impostoPercent: pct(imposto),
+          margemContribuicao,
+          margemContribuicaoPercent,
           lucroLiquido,
           margemLucro,
         });
@@ -299,7 +323,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
       qs.set("channel", channel);
       const res = await fetch(`${API_URL}/api/simulation/production-cost?${qs.toString()}`);
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || "Falha ao carregar custo de produÃ§Ã£o.");
+      if (!res.ok) throw new Error(json?.message || "Falha ao carregar custo de produção.");
       setCustoDetail(json as ProductionCostDetail);
     } catch (e: any) {
       setDetailError(e.message || "Erro ao carregar.");
@@ -320,13 +344,10 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
       <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
         <div className={cn(UI.card, "p-6")}>
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:flex-wrap">
-            <div className="flex-1 min-w-0">
-              <h2 className="text-lg font-black tracking-tight text-slate-900">SimulaÃ§Ã£o P&L</h2>
-            </div>
             <div className="flex flex-wrap items-end gap-3">
               <div>
                 <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
-                  MÃªs inicial
+                  Mês inicial
                 </label>
                 <input
                   type="month"
@@ -337,7 +358,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
               </div>
               <div>
                 <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
-                  MÃªs final
+                  Mês final
                 </label>
                 <input
                   type="month"
@@ -374,22 +395,22 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
             <div className="text-xs font-semibold text-slate-600">
-              PerÃ­odo:{" "}
+              Período:{" "}
               <span className="font-extrabold text-slate-900">
                 {monthRange.start}
               </span>{" "}
               {monthRange.start !== monthRange.end ? (
                 <>
-                  <span className="text-slate-400">â†’</span>{" "}
+                  <span className="text-slate-400">→</span>{" "}
                   <span className="font-extrabold text-slate-900">{monthRange.end}</span>{" "}
-                  <span className="text-slate-400">Â·</span>{" "}
+                  <span className="text-slate-400">·</span>{" "}
                   <span className="font-bold text-slate-700">{monthsInRange.length} meses</span>
                 </>
               ) : null}
             </div>
             {isMultiMonth ? (
               <div className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                Detalhe de custo de produÃ§Ã£o disponÃ­vel apenas para 1 mÃªs.
+                Detalhe de custo de produção disponível apenas para 1 mês.
               </div>
             ) : null}
           </div>
@@ -411,7 +432,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
             >
               <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 bg-slate-50">
                 <h3 id="sim-detail-title" className="text-sm font-extrabold text-slate-900">
-                  Custo de produÃ§Ã£o â€” detalhe
+                  Custo de produção — detalhe
                 </h3>
                 <button
                   type="button"
@@ -428,7 +449,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                 {!detailLoading && !detailError && detailKind === "custo" && custoDetail && (
                   <div className="space-y-4">
                     <p className="text-xs text-slate-500">
-                      {custoDetail.month} â€” {channelLabel[custoDetail.channel] || custoDetail.channel}
+                      {custoDetail.month} — {channelLabel[custoDetail.channel] || custoDetail.channel}
                     </p>
                     <div className="overflow-auto rounded-xl border border-slate-200">
                       <table className="w-full min-w-[520px] text-sm">
@@ -457,7 +478,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                           {custoDetail.lines.length === 0 && (
                             <tr>
                               <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
-                                Nenhuma linha de pedido no perÃ­odo.
+                                Nenhuma linha de pedido no período.
                               </td>
                             </tr>
                           )}
@@ -485,7 +506,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
           <div className={cn(UI.card, "overflow-hidden")}>
             <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
               <h3 className="text-sm font-extrabold tracking-wide text-slate-900">
-                {data.month} â€” {channelLabel[data.channel] || data.channel}
+                {data.month} — {channelLabel[data.channel] || data.channel}
               </h3>
             </div>
             <div className="p-6">
@@ -503,7 +524,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                       </button>
                     </td>
                     <td className="py-2 text-right font-extrabold text-slate-900">{fmtMoney(data.faturamentoBruto)}</td>
-                    <td className="py-2 w-16 text-right text-slate-500">â€”</td>
+                    <td className="py-2 w-16 text-right text-slate-500">—</td>
                   </tr>
                   <tr className="border-b border-slate-100">
                     <td className="py-2 pr-4 text-slate-700">
@@ -559,7 +580,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                           onChange={() => toggleInclude("taxasCartaoPix")}
                           className="h-4 w-4 rounded border-slate-300"
                         />
-                        <span>(-) Taxas CartÃ£o/PIX</span>
+                        <span>(-) Taxas Cartão/PIX</span>
                       </label>
                     </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.taxasCartaoPix)}</td>
@@ -596,27 +617,12 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                             className="h-4 w-4 rounded border-slate-300"
                             onClick={(e) => e.stopPropagation()}
                           />
-                          <span>(-) Custo de ProduÃ§Ã£o</span>
+                          <span>(-) Custo de Produção</span>
                         </span>
                       </button>
                     </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.custoProducao)}</td>
                     <td className="py-2 text-right text-slate-500">{data.custoProducaoPercent.toFixed(2)}%</td>
-                  </tr>
-                  <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">
-                      <label className="inline-flex items-center gap-2 select-none">
-                        <input
-                          type="checkbox"
-                          checked={include.custoFixo}
-                          onChange={() => toggleInclude("custoFixo")}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        <span>(-) Custo Fixo</span>
-                      </label>
-                    </td>
-                    <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.custoFixo)}</td>
-                    <td className="py-2 text-right text-slate-500">{data.custoFixoPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
                     <td className="py-2 pr-4 text-slate-700">
@@ -633,8 +639,35 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.imposto)}</td>
                     <td className="py-2 text-right text-slate-500">{data.impostoPercent.toFixed(2)}%</td>
                   </tr>
+                  <tr className="bg-sky-50 border-y border-sky-100">
+                    <td className="py-3 pr-4">
+                      <span className="font-extrabold text-slate-900">(=) Margem de Contribuição</span>
+                      <span className="mt-0.5 block text-[10px] font-medium text-slate-500">
+                        Faturamento menos custos variáveis (antes do custo fixo)
+                      </span>
+                    </td>
+                    <td className="py-3 text-right font-black text-sky-950">{fmtMoney(data.margemContribuicao)}</td>
+                    <td className="py-3 text-right font-extrabold text-sky-800">
+                      {data.margemContribuicaoPercent.toFixed(2)}%
+                    </td>
+                  </tr>
+                  <tr className="border-b border-slate-100">
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.custoFixo}
+                          onChange={() => toggleInclude("custoFixo")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Custo Fixo</span>
+                      </label>
+                    </td>
+                    <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.custoFixo)}</td>
+                    <td className="py-2 text-right text-slate-500">{data.custoFixoPercent.toFixed(2)}%</td>
+                  </tr>
                   <tr className="bg-emerald-50">
-                    <td className="py-3 pr-4 font-extrabold text-slate-900">(=) Lucro LÃ­quido Final</td>
+                    <td className="py-3 pr-4 font-extrabold text-slate-900">(=) Lucro Líquido Final</td>
                     <td className="py-3 text-right font-black text-slate-900">{fmtMoney(data.lucroLiquido)}</td>
                     <td className="py-3"></td>
                   </tr>
