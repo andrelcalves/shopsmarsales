@@ -9,6 +9,107 @@ import util from 'util';
 import { createRequire } from 'module';
 import * as shopeeApi from './shopeeApi.js';
 import { parseTikTokIncomeReport } from './tiktokIncome.js';
+import {
+  buildProductCostLookup,
+  effectiveCostDisplay,
+  getLatestCostEntry,
+  resolveCostFromLookup,
+  type CostHistoryRow,
+  type ProductCostLookup,
+} from './productCost.js';
+import {
+  resolveCombinedCost,
+  type CombinedCostLookup,
+  type MasterCostHistoryRow,
+} from './masterProductCost.js';
+import {
+  registerMasterProductRoutes,
+  loadCombinedCostLookup,
+  buildMasterStockCurrent,
+} from './masterProductRoutes.js';
+
+function parseDateOnly(dateStr: string): Date | null {
+  const s = String(dateStr ?? '').trim();
+  if (!s) return null;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+async function loadCostHistoryMap(prismaAny: any, productIds: number[]): Promise<ProductCostLookup> {
+  const uniqueIds = [...new Set(productIds.filter((id) => Number.isInteger(id) && id > 0))];
+  if (uniqueIds.length === 0) {
+    return { byProductId: new Map(), fallbackByProductId: new Map() };
+  }
+  const [historyRows, products] = await Promise.all([
+    prismaAny.productCostHistory.findMany({
+      where: { productId: { in: uniqueIds } },
+      orderBy: [{ productId: 'asc' }, { effectiveDate: 'asc' }],
+    }),
+    prismaAny.product.findMany({
+      where: { id: { in: uniqueIds } },
+      select: { id: true, costPrice: true },
+    }),
+  ]);
+  const rows: CostHistoryRow[] = historyRows.map((r: any) => ({
+    productId: r.productId,
+    unitCost: Number(r.unitCost),
+    effectiveDate: new Date(r.effectiveDate),
+  }));
+  return buildProductCostLookup(rows, products);
+}
+
+async function syncProductCostFromHistory(prismaAny: any, productId: number): Promise<void> {
+  const latest = await prismaAny.productCostHistory.findFirst({
+    where: { productId, effectiveDate: { lte: new Date() } },
+    orderBy: [{ effectiveDate: 'desc' }, { id: 'desc' }],
+  });
+  if (latest) {
+    await prismaAny.product.update({
+      where: { id: productId },
+      data: { costPrice: Number(latest.unitCost) },
+    });
+  }
+}
+
+async function createProductCostEntry(
+  prismaAny: any,
+  productId: number,
+  unitCost: number,
+  effectiveDate: Date,
+  notes = 'stock',
+) {
+  const entry = await prismaAny.productCostHistory.create({
+    data: { productId, unitCost, effectiveDate, notes },
+  });
+  await syncProductCostFromHistory(prismaAny, productId);
+  return entry;
+}
+
+function effectiveCostFields(
+  lookup: ProductCostLookup,
+  productId: number,
+  fallbackCost: number | null,
+  asOf: Date = new Date(),
+) {
+  const rows = lookup.byProductId.get(productId);
+  const latest = getLatestCostEntry(rows, asOf);
+  const display = effectiveCostDisplay(latest, fallbackCost);
+  return {
+    costPrice: display.unitCost,
+    effectiveCostDate: display.effectiveDate,
+    costSource: display.source,
+  };
+}
+
+function collectProductIdsFromOrders(orders: Array<{ items: Array<{ productId: number | null }> }>): number[] {
+  const ids = new Set<number>();
+  for (const o of orders) {
+    for (const item of o.items) {
+      if (item.productId != null) ids.add(item.productId);
+    }
+  }
+  return [...ids];
+}
 
 type FormFields = Record<string, unknown>;
 type FormFiles = Record<string, unknown>;
@@ -1070,10 +1171,8 @@ async function main() {
               if (parentCode && r.baseName) parentNames.set(parentCode, r.baseName);
             }
           }
-          // Auto-group variations by parent product
-          for (const [parentCode, baseName] of parentNames.entries()) {
-            await autoGroupVariations(prisma, parentCode, baseName);
-          }
+          // Auto-grouping desativado: o vínculo cross-channel passou para a tela "Produtos mestre" (manual via SKU mestre).
+          void parentNames;
           for (const r of rows) {
             const productId = productIds.get(`shopee_${r.productCode}`);
             ops.push(
@@ -1455,7 +1554,65 @@ async function main() {
       console.error(e);
       return res.status(500).json({ message: 'Erro ao atualizar produto.' });
     }
-  }); 
+  });
+
+  app.get('/api/products/:id/cost-history', async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id), 10);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: 'ID inválido.' });
+      const prismaAnyProd = prisma as any;
+      const rows = await prismaAnyProd.productCostHistory.findMany({
+        where: { productId: id },
+        orderBy: [{ effectiveDate: 'desc' }, { id: 'desc' }],
+      });
+      return res.status(200).json(
+        rows.map((r: any) => ({
+          id: r.id,
+          productId: r.productId,
+          unitCost: r.unitCost,
+          effectiveDate: new Date(r.effectiveDate).toISOString().slice(0, 10),
+          notes: r.notes,
+          createdAt: r.createdAt,
+        })),
+      );
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar histórico de custo.' });
+    }
+  });
+
+  app.post('/api/products/:id/cost-history', async (req, res) => {
+    try {
+      const id = parseInt(String(req.params.id), 10);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: 'ID inválido.' });
+      const { unitCost, effectiveDate, notes } = req.body ?? {};
+      const cost = parseBrNumber(unitCost);
+      if (cost == null || cost < 0) return res.status(400).json({ message: 'Preço de custo inválido.' });
+      const effDate = effectiveDate ? parseDateOnly(String(effectiveDate)) : new Date();
+      if (!effDate) return res.status(400).json({ message: 'Data de vigência inválida.' });
+      const prismaAnyProd = prisma as any;
+      const product = await prisma.product.findUnique({ where: { id } });
+      if (!product) return res.status(404).json({ message: 'Produto não encontrado.' });
+      const entry = await createProductCostEntry(
+        prismaAnyProd,
+        id,
+        cost,
+        effDate,
+        String(notes ?? 'manual'),
+      );
+      return res.status(201).json({
+        id: entry.id,
+        productId: entry.productId,
+        unitCost: entry.unitCost,
+        effectiveDate: new Date(entry.effectiveDate).toISOString().slice(0, 10),
+        notes: entry.notes,
+        createdAt: entry.createdAt,
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao registrar custo.' });
+    }
+  });
   // Remove registros por origem (ex.: ?source=tray)
   app.delete('/api/orders', async (req, res) => {
     try {
@@ -2044,15 +2201,27 @@ async function main() {
 
   app.put('/api/product-stock', async (req, res) => {
     try {
-      const { productId, quantity } = req.body ?? {};
+      const { productId, quantity, unitCost, effectiveDate } = req.body ?? {};
       const pid = productId != null ? parseInt(String(productId), 10) : NaN;
       const qty = quantity != null ? parseInt(String(quantity), 10) : 0;
       if (!Number.isInteger(pid) || pid <= 0) return res.status(400).json({ message: 'productId inválido.' });
+      if (qty > 0 && (unitCost == null || unitCost === '')) {
+        return res.status(400).json({ message: 'Preço de custo é obrigatório quando a quantidade é maior que zero.' });
+      }
       const row = await prismaAny.productStock.upsert({
         where: { productId: pid },
         update: { quantity: qty },
         create: { productId: pid, quantity: qty },
       });
+      if (unitCost != null && unitCost !== '') {
+        const cost = parseBrNumber(unitCost);
+        if (cost == null || cost < 0) {
+          return res.status(400).json({ message: 'Preço de custo inválido.' });
+        }
+        const effDate = effectiveDate ? parseDateOnly(String(effectiveDate)) : new Date();
+        if (!effDate) return res.status(400).json({ message: 'Data de vigência inválida.' });
+        await createProductCostEntry(prismaAny, pid, cost, effDate, 'stock');
+      }
       return res.status(200).json(row);
     } catch (e) {
       console.error(e);
@@ -2067,111 +2236,22 @@ async function main() {
     return true;
   }
 
-  app.get('/api/stock-current', async (_req, res) => {
+  app.get('/api/stock-current', async (req, res) => {
     try {
-      const config = await prismaAny.inventoryConfig.findFirst({ orderBy: { id: 'desc' } });
-      const stockStartDate = config ? new Date(config.stockStartDate) : null;
-
-      const ordersSince = stockStartDate
-        ? await prisma.order.findMany({
-            where: { orderDate: { gte: stockStartDate } },
-            include: { items: true },
-          })
-        : [];
-
-      const soldByProduct = new Map<number, number>();
-      for (const o of ordersSince) {
-        if (!isOrderValidForStock(o)) continue;
-        for (const item of o.items) {
-          const pid = item.productId;
-          if (pid == null) continue;
-          soldByProduct.set(pid, (soldByProduct.get(pid) || 0) + (item.quantity || 0));
-        }
-      }
-
-      const result: any[] = [];
-      const productIdsInGroup = new Set<number>();
-
-      if (prismaAny.productGroup) {
-        const allGroupItems = await prismaAny.productGroupItem.findMany({
-          include: { productGroup: true, product: true },
-        });
-        allGroupItems.forEach((gi: any) => productIdsInGroup.add(gi.productId));
-
-        const groupStockRows = await prismaAny.productGroupStock.findMany({
-          include: {
-            productGroup: {
-              include: { items: { include: { product: true } } },
-            },
-          },
-          orderBy: { productGroupId: 'asc' },
-        });
-        for (const gs of groupStockRows) {
-          const group = gs.productGroup;
-          const groupItems = group?.items ?? [];
-          const productIds = groupItems.map((i: any) => i.productId);
-          const sold = productIds.reduce((sum: number, pid: number) => sum + (soldByProduct.get(pid) || 0), 0);
-          const opening = gs.quantity || 0;
-          const current = Math.max(0, opening - sold);
-          const firstProduct = groupItems[0]?.product;
-
-          const variations = groupItems.map((gi: any) => ({
-            productId: gi.productId,
-            name: gi.product?.name ?? '',
-            variationName: gi.product?.variationName ?? null,
-            source: gi.product?.source ?? '',
-            sold: soldByProduct.get(gi.productId) || 0,
-          }));
-
-          result.push({
-            type: 'group',
-            productGroupId: gs.productGroupId,
-            productId: null,
-            code: null,
-            name: group?.name ?? 'Grupo',
-            opening,
-            sold,
-            current,
-            costPrice: firstProduct?.costPrice ?? null,
-            productNames: groupItems.map((i: any) => i.product?.name).filter(Boolean),
-            variations,
-          });
-        }
-      }
-
-      const stockRows = await prismaAny.productStock.findMany({
-        include: { product: true },
-        orderBy: { productId: 'asc' },
-      });
-      for (const r of stockRows) {
-        if (productIdsInGroup.has(r.productId)) continue;
-        const opening = r.quantity || 0;
-        const sold = soldByProduct.get(r.productId) || 0;
-        const current = Math.max(0, opening - sold);
-        result.push({
-          type: 'product',
-          productGroupId: null,
-          productId: r.productId,
-          code: r.product?.code,
-          name: r.product?.name,
-          opening,
-          sold,
-          current,
-          costPrice: r.product?.costPrice,
-        });
-      }
-
-      result.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-      return res.status(200).json({
-        stockStartDate: stockStartDate ? stockStartDate.toISOString().slice(0, 10) : null,
-        items: result,
-      });
+      const data = await buildMasterStockCurrent(prismaAny, prisma, isOrderValidForStock);
+      const nameQ = String(req.query.name ?? '').trim().toLowerCase();
+      const skuQ = String(req.query.sku ?? '').trim().toLowerCase();
+      let items = data.items;
+      if (nameQ) items = items.filter((i: any) => String(i.name || '').toLowerCase().includes(nameQ));
+      if (skuQ) items = items.filter((i: any) => String(i.sku || '').toLowerCase().includes(skuQ));
+      return res.status(200).json({ stockStartDate: data.stockStartDate, items });
     } catch (e) {
       console.error(e);
       return res.status(500).json({ message: 'Erro ao calcular estoque atual.' });
     }
   });
+
+  registerMasterProductRoutes(app, { prisma, parseBrNumber, parseDateOnly, isOrderValidForStock });
 
     // --- Contas a pagar (Bills) ---
   const updateBillStatus = async (billId: number) => {
@@ -2468,68 +2548,48 @@ async function main() {
         }
       }
 
+      const masters = await prismaAny.masterProduct.findMany({
+        include: { stock: true, products: true, costHistory: true },
+        orderBy: { name: 'asc' },
+      });
+
+      const now = new Date();
       let projectedRevenue = 0;
       let projectedCost = 0;
       const details: any[] = [];
-      const productIdsInGroup = new Set<number>();
 
-      if (prismaAny.productGroupItem) {
-        const allGroupItems = await prismaAny.productGroupItem.findMany({});
-        allGroupItems.forEach((gi: any) => productIdsInGroup.add(gi.productId));
-      }
-      if (prismaAny.productGroupStock) {
-        const groupStockRows = await prismaAny.productGroupStock.findMany({
-          include: {
-            productGroup: {
-              include: { items: { include: { product: true } } },
-            },
-          },
-        });
-        for (const gs of groupStockRows) {
-          const group = gs.productGroup;
-          const productIds = (group?.items ?? []).map((i: any) => i.productId);
-          const sold = productIds.reduce((sum: number, pid: number) => sum + (soldByProduct.get(pid) || 0), 0);
-          const opening = gs.quantity || 0;
-          const current = Math.max(0, opening - sold);
-          const items = group?.items ?? [];
-          const avgUnitPrice =
-            items.length > 0
-              ? items.reduce((s: number, i: any) => s + (avgPriceByProduct.get(i.productId) ?? i.product?.costPrice ?? 0), 0) / items.length
-              : 0;
-          const costPrice = items[0]?.product?.costPrice ?? 0;
-          const unitPrice = avgUnitPrice || costPrice || 0;
-          projectedRevenue += current * unitPrice;
-          projectedCost += current * costPrice;
-          details.push({
-            type: 'group',
-            productGroupId: gs.productGroupId,
-            productId: null,
-            name: group?.name ?? 'Grupo',
-            current,
-            unitPrice,
-            revenue: Math.round(current * unitPrice * 100) / 100,
-          });
-        }
-      }
-
-      const stockRows = await prismaAny.productStock.findMany({
-        include: { product: true },
-      });
-      for (const r of stockRows) {
-        if (productIdsInGroup.has(r.productId)) continue;
-        const opening = r.quantity || 0;
-        const sold = soldByProduct.get(r.productId) || 0;
+      for (const m of masters) {
+        const productIds = (m.products ?? []).map((p: any) => p.id);
+        const sold = productIds.reduce((s: number, pid: number) => s + (soldByProduct.get(pid) || 0), 0);
+        const opening = m.stock?.quantity ?? 0;
         const current = Math.max(0, opening - sold);
-        const costPrice = r.product?.costPrice ?? 0;
-        const avgUnitPrice = avgPriceByProduct.get(r.productId) ?? costPrice ?? 0;
-        const unitPrice = avgUnitPrice || costPrice || 0;
+        const avgUnitPrice = productIds.length > 0
+          ? productIds.reduce((s: number, pid: number) => s + (avgPriceByProduct.get(pid) ?? 0), 0) / productIds.length
+          : 0;
+        const fallbackCost = ((m.products ?? []).find((p: any) => p.costPrice != null)?.costPrice) ?? 0;
+        const unitPrice = avgUnitPrice || fallbackCost || 0;
+
+        const costRows: MasterCostHistoryRow[] = (m.costHistory ?? [])
+          .map((r: any) => ({
+            masterProductId: r.masterProductId,
+            unitCost: Number(r.unitCost),
+            effectiveDate: new Date(r.effectiveDate),
+          }))
+          .sort((a: MasterCostHistoryRow, b: MasterCostHistoryRow) => a.effectiveDate.getTime() - b.effectiveDate.getTime());
+        let unitCost = fallbackCost;
+        let last: MasterCostHistoryRow | null = null;
+        for (const r of costRows) {
+          if (r.effectiveDate.getTime() <= now.getTime()) last = r;
+        }
+        if (last) unitCost = last.unitCost;
+
         projectedRevenue += current * unitPrice;
-        projectedCost += current * costPrice;
+        projectedCost += current * unitCost;
         details.push({
-          type: 'product',
-          productGroupId: null,
-          productId: r.productId,
-          name: r.product?.name,
+          type: 'master',
+          masterProductId: m.id,
+          sku: m.sku,
+          name: m.name,
           current,
           unitPrice,
           revenue: Math.round(current * unitPrice * 100) / 100,
@@ -2626,10 +2686,19 @@ async function main() {
           ? orders.filter((o) => isTrayOrderSource(o.source)).reduce((s, o) => s + ((o as any).freight || 0), 0)
           : 0;
 
+      const simProductIds = collectProductIdsFromOrders(orders);
+      const simCombined = await loadCombinedCostLookup(prismaAny, simProductIds);
+
       const productionCost = orders.reduce((s, o) => {
+        const orderDate = new Date(o.orderDate);
         for (const item of o.items) {
-          const cost = (item.product?.costPrice ?? 0) * (item.quantity || 0);
-          s += cost;
+          const unitCost = resolveCombinedCost(
+            simCombined,
+            item.productId,
+            orderDate,
+            item.product?.costPrice,
+          );
+          s += unitCost * (item.quantity || 0);
         }
         return s;
       }, 0);
@@ -2712,53 +2781,132 @@ async function main() {
     }
   });
 
-  // Detalhe do custo de produção da simulação (agregado por produto / linha)
-  // GET /api/simulation/production-cost?month=2026-01&channel=all
+  // Detalhe do custo de produção da simulação (agregado por produto mestre ou por produto de canal)
+  // GET /api/simulation/production-cost?month=2026-01&channel=all&groupBy=master|product
   app.get('/api/simulation/production-cost', async (req, res) => {
     try {
       const monthStr = String(req.query.month ?? '').trim();
       const channel = String(req.query.channel ?? 'all').trim().toLowerCase();
+      const groupByRaw = String(req.query.groupBy ?? 'master').trim().toLowerCase();
+      const groupBy = groupByRaw === 'product' ? 'product' : 'master';
       const monthStart = monthStartFromYYYYMM(monthStr);
       if (!monthStart) return res.status(400).json({ message: 'Parâmetro month inválido (use YYYY-MM).' });
 
       const orderWhere = buildSimulationOrderWhere(monthStart, channel);
       const orders = await prisma.order.findMany({
         where: orderWhere,
-        include: { items: { include: { product: true } } },
+        include: {
+          items: { include: { product: { include: { masterProduct: true } } } },
+        },
         orderBy: [{ orderDate: 'asc' }, { orderId: 'asc' }],
       });
 
-      type LineAgg = {
+      const pcProductIds = collectProductIdsFromOrders(orders);
+      const pcCombined = await loadCombinedCostLookup(prismaAny, pcProductIds);
+
+      type MemberAgg = {
         productId: number | null;
         productCode: string;
         name: string;
         quantity: number;
         totalCost: number;
       };
+      type LineAgg = {
+        productId: number | null;
+        productCode: string;
+        name: string;
+        masterProductId: number | null;
+        masterSku: string | null;
+        quantity: number;
+        totalCost: number;
+        members: Map<string, MemberAgg>;
+      };
       const map = new Map<string, LineAgg>();
 
+      let totalQuantity = 0;
+      let totalCostAll = 0;
+
       for (const o of orders) {
+        const orderDate = new Date(o.orderDate);
         for (const item of o.items) {
           const qty = item.quantity || 0;
           if (qty <= 0) continue;
-          const unitCost = Number(item.product?.costPrice ?? 0);
+          const unitCost = resolveCombinedCost(
+            pcCombined,
+            item.productId,
+            orderDate,
+            item.product?.costPrice,
+          );
           const lineCost = unitCost * qty;
-          const key =
-            item.productId != null
-              ? `pid:${item.productId}`
-              : `row:${String(item.productCode || '')}|${String(item.name || '')}`;
+          totalQuantity += qty;
+          totalCostAll += lineCost;
+
+          const productCode = String(item.productCode || '');
+          const itemName = String(item.name || '');
+          const master = (item.product as any)?.masterProduct as
+            | { id: number; sku: string; name: string }
+            | null
+            | undefined;
+
+          let key: string;
+          let displayName: string;
+          let lineProductId: number | null = item.productId ?? null;
+          let lineProductCode = productCode;
+          let masterProductId: number | null = null;
+          let masterSku: string | null = null;
+
+          if (groupBy === 'master' && master) {
+            key = `master:${master.id}`;
+            displayName = master.name;
+            masterProductId = master.id;
+            masterSku = master.sku;
+            lineProductId = null;
+            lineProductCode = '';
+          } else if (item.productId != null) {
+            key = `pid:${item.productId}`;
+            displayName = item.product?.name || itemName;
+            lineProductId = item.productId;
+          } else {
+            key = `row:${productCode}|${itemName}`;
+            displayName = itemName;
+          }
+
           const cur = map.get(key);
           if (cur) {
             cur.quantity += qty;
             cur.totalCost += lineCost;
           } else {
             map.set(key, {
-              productId: item.productId ?? null,
-              productCode: String(item.productCode || ''),
-              name: String(item.name || ''),
+              productId: lineProductId,
+              productCode: lineProductCode,
+              name: displayName,
+              masterProductId,
+              masterSku,
               quantity: qty,
               totalCost: lineCost,
+              members: new Map(),
             });
+          }
+
+          if (groupBy === 'master' && master) {
+            const line = map.get(key)!;
+            const memberKey =
+              item.productId != null
+                ? `pid:${item.productId}`
+                : `row:${productCode}|${itemName}`;
+            const memberCur = line.members.get(memberKey);
+            if (memberCur) {
+              memberCur.quantity += qty;
+              memberCur.totalCost += lineCost;
+            } else {
+              line.members.set(memberKey, {
+                productId: item.productId ?? null,
+                productCode,
+                name: item.product?.name || itemName,
+                quantity: qty,
+                totalCost: lineCost,
+              });
+            }
           }
         }
       }
@@ -2768,26 +2916,43 @@ async function main() {
           const totalCost = Math.round(l.totalCost * 100) / 100;
           const unitCost =
             l.quantity > 0 ? Math.round((l.totalCost / l.quantity) * 10000) / 10000 : 0;
+          const members =
+            groupBy === 'master' && l.members.size > 0
+              ? [...l.members.values()]
+                  .map((m) => ({
+                    productId: m.productId,
+                    productCode: m.productCode,
+                    name: m.name,
+                    quantity: m.quantity,
+                    totalCost: Math.round(m.totalCost * 100) / 100,
+                    unitCost:
+                      m.quantity > 0
+                        ? Math.round((m.totalCost / m.quantity) * 10000) / 10000
+                        : 0,
+                  }))
+                  .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+              : undefined;
           return {
             productId: l.productId,
             productCode: l.productCode,
             name: l.name,
+            masterProductId: l.masterProductId,
+            masterSku: l.masterSku,
             unitCost,
             quantity: l.quantity,
             totalCost,
+            ...(members ? { members } : {}),
           };
         })
         .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 
-      const totalQuantity = lines.reduce((s, l) => s + l.quantity, 0);
-      const totalCostAll = Math.round(lines.reduce((s, l) => s + l.totalCost, 0) * 100) / 100;
-
       return res.status(200).json({
         month: monthStr,
         channel,
+        groupBy,
         lines,
         totalQuantity,
-        totalCost: totalCostAll,
+        totalCost: Math.round(totalCostAll * 100) / 100,
       });
     } catch (e) {
       console.error(e);
@@ -3109,21 +3274,22 @@ app.get('/api/dashboard', async (_req, res) => {
         },
         include: {
           product: {
-            include: { productGroupItem: { include: { productGroup: true } } },
+            include: { masterProduct: true },
           },
         },
       });
 
-      // Consolidate by group when product belongs to a group; otherwise show individually
-      const ranking: Record<string, { displayName: string; quantity: number; total: number; sources: Set<string>; groupId: number | null; products: Set<string> }> = {};
+      // Consolidate by master product when available; otherwise show individually.
+      const ranking: Record<string, { displayName: string; sku: string | null; quantity: number; total: number; sources: Set<string>; masterId: number | null; products: Set<string> }> = {};
       for (const it of items) {
-        const group = it.product?.productGroupItem?.productGroup;
+        const master = (it.product as any)?.masterProduct as { id: number; sku: string; name: string } | null | undefined;
         const productName = it.product?.name || it.name;
-        const key = group ? `__group_${group.id}` : productName;
+        const key = master ? `__master_${master.id}` : productName;
         if (!ranking[key]) {
           ranking[key] = {
-            displayName: group ? group.name : productName,
-            quantity: 0, total: 0, sources: new Set(), groupId: group?.id ?? null, products: new Set(),
+            displayName: master ? master.name : productName,
+            sku: master ? master.sku : null,
+            quantity: 0, total: 0, sources: new Set(), masterId: master?.id ?? null, products: new Set(),
           };
         }
         ranking[key].quantity += it.quantity || 0;
@@ -3135,10 +3301,11 @@ app.get('/api/dashboard', async (_req, res) => {
       const sorted = Object.values(ranking)
         .map(d => ({
           name: d.displayName,
+          sku: d.sku,
           quantity: d.quantity,
           total: Number(d.total.toFixed(2)),
           channels: Array.from(d.sources),
-          groupId: d.groupId,
+          masterId: d.masterId,
           products: Array.from(d.products),
         }))
         .sort((a, b) => b.total - a.total);
@@ -3637,11 +3804,8 @@ app.get('/api/dashboard', async (_req, res) => {
           if (parentCode) parentItemIds.add(`${parentCode}|${item.item_name}`);
         }
 
-        // Auto-group Shopee variations
-        for (const entry of parentItemIds) {
-          const [parentCode, baseName] = entry.split('|');
-          await autoGroupVariations(prisma, parentCode, baseName);
-        }
+        // Auto-grouping desativado para sync Shopee — manter dados em "Pendentes" para vinculação manual ao SKU mestre.
+        void parentItemIds;
 
         synced++;
       }
@@ -3911,10 +4075,34 @@ app.get('/api/dashboard', async (_req, res) => {
         },
       });
 
+      const prismaAnyCh = prisma as any;
+      const allHistory = await prismaAnyCh.productCostHistory.findMany({
+        orderBy: [{ productId: 'asc' }, { effectiveDate: 'asc' }],
+      });
+      const historyByProduct = new Map<number, CostHistoryRow[]>();
+      for (const r of allHistory) {
+        const list = historyByProduct.get(r.productId) ?? [];
+        list.push({
+          productId: r.productId,
+          unitCost: Number(r.unitCost),
+          effectiveDate: new Date(r.effectiveDate),
+        });
+        historyByProduct.set(r.productId, list);
+      }
+      const now = new Date();
+
       const result = products.map((p) => {
         const totalQtySold = (p.orderItems ?? []).reduce((sum, oi) => sum + (oi.quantity || 0), 0);
         const { orderItems: _oi, ...rest } = p;
-        return { ...rest, totalQtySold };
+        const latest = getLatestCostEntry(historyByProduct.get(p.id), now);
+        const display = effectiveCostDisplay(latest, p.costPrice);
+        return {
+          ...rest,
+          totalQtySold,
+          effectiveCost: display.unitCost,
+          effectiveCostDate: display.effectiveDate,
+          costSource: display.source,
+        };
       });
 
       return res.json(result);

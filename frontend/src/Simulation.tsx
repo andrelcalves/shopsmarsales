@@ -38,7 +38,7 @@ type SimulationItemKey =
   | "custoFixo"
   | "imposto";
 
-type ProductionCostLine = {
+type ProductionCostMemberLine = {
   productId: number | null;
   productCode: string;
   name: string;
@@ -47,9 +47,24 @@ type ProductionCostLine = {
   totalCost: number;
 };
 
+type ProductionCostLine = {
+  productId: number | null;
+  productCode: string;
+  name: string;
+  masterProductId?: number | null;
+  masterSku?: string | null;
+  unitCost: number;
+  quantity: number;
+  totalCost: number;
+  members?: ProductionCostMemberLine[];
+};
+
+type CostGroupBy = "master" | "product";
+
 type ProductionCostDetail = {
   month: string;
   channel: string;
+  groupBy: CostGroupBy;
   lines: ProductionCostLine[];
   totalQuantity: number;
   totalCost: number;
@@ -129,6 +144,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [custoDetail, setCustoDetail] = useState<ProductionCostDetail | null>(null);
+  const [costGroupBy, setCostGroupBy] = useState<CostGroupBy>("master");
 
   const now = new Date();
   const defaultMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -311,9 +327,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
     });
   }
 
-  async function openCustoDetail() {
-    if (isMultiMonth) return;
-    setDetailKind("custo");
+  async function loadCustoDetail(groupBy: CostGroupBy) {
     setDetailLoading(true);
     setDetailError("");
     setCustoDetail(null);
@@ -321,15 +335,28 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
       const qs = new URLSearchParams();
       qs.set("month", startMonth);
       qs.set("channel", channel);
+      qs.set("groupBy", groupBy);
       const res = await fetch(`${API_URL}/api/simulation/production-cost?${qs.toString()}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || "Falha ao carregar custo de produção.");
       setCustoDetail(json as ProductionCostDetail);
+      setCostGroupBy(groupBy);
     } catch (e: any) {
       setDetailError(e.message || "Erro ao carregar.");
     } finally {
       setDetailLoading(false);
     }
+  }
+
+  async function openCustoDetail() {
+    if (isMultiMonth) return;
+    setDetailKind("custo");
+    await loadCustoDetail(costGroupBy);
+  }
+
+  async function switchCostGroupBy(next: CostGroupBy) {
+    if (next === costGroupBy && custoDetail) return;
+    await loadCustoDetail(next);
   }
 
   if (!data && !loading && !message)
@@ -448,14 +475,51 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                 {detailError && <p className="text-sm font-semibold text-red-600">{detailError}</p>}
                 {!detailLoading && !detailError && detailKind === "custo" && custoDetail && (
                   <div className="space-y-4">
-                    <p className="text-xs text-slate-500">
-                      {custoDetail.month} — {channelLabel[custoDetail.channel] || custoDetail.channel}
-                    </p>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-xs text-slate-500">
+                        {custoDetail.month} — {channelLabel[custoDetail.channel] || custoDetail.channel}
+                      </p>
+                      <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
+                        <button
+                          type="button"
+                          disabled={detailLoading}
+                          onClick={() => switchCostGroupBy("master")}
+                          className={cn(
+                            "rounded-lg px-3 py-1.5 text-xs font-extrabold transition",
+                            costGroupBy === "master"
+                              ? "bg-slate-900 text-white"
+                              : "text-slate-600 hover:bg-slate-50",
+                          )}
+                        >
+                          Por produto mestre
+                        </button>
+                        <button
+                          type="button"
+                          disabled={detailLoading}
+                          onClick={() => switchCostGroupBy("product")}
+                          className={cn(
+                            "rounded-lg px-3 py-1.5 text-xs font-extrabold transition",
+                            costGroupBy === "product"
+                              ? "bg-slate-900 text-white"
+                              : "text-slate-600 hover:bg-slate-50",
+                          )}
+                        >
+                          Por produto de canal
+                        </button>
+                      </div>
+                    </div>
                     <div className="overflow-auto rounded-xl border border-slate-200">
                       <table className="w-full min-w-[520px] text-sm">
                         <thead className="sticky top-0 bg-slate-100 text-left text-xs font-extrabold uppercase tracking-wider text-slate-600">
                           <tr>
-                            <th className="px-3 py-2">Produto</th>
+                            {costGroupBy === "master" ? (
+                              <>
+                                <th className="px-3 py-2">SKU mestre</th>
+                                <th className="px-3 py-2">Nome canônico</th>
+                              </>
+                            ) : (
+                              <th className="px-3 py-2">Produto</th>
+                            )}
                             <th className="px-3 py-2 text-right">Custo unit.</th>
                             <th className="px-3 py-2 text-right">Qtd</th>
                             <th className="px-3 py-2 text-right">Total</th>
@@ -463,13 +527,36 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {custoDetail.lines.map((row, idx) => (
-                            <tr key={`${row.productCode}-${row.name}-${idx}`} className="hover:bg-slate-50/80">
-                              <td className="px-3 py-2 text-slate-800">
-                                <span className="font-semibold">{row.name}</span>
-                                {row.productCode ? (
-                                  <span className="block text-xs font-normal text-slate-500">{row.productCode}</span>
-                                ) : null}
-                              </td>
+                            <tr
+                              key={
+                                row.masterProductId != null
+                                  ? `master-${row.masterProductId}`
+                                  : `${row.productCode}-${row.name}-${idx}`
+                              }
+                              className="hover:bg-slate-50/80"
+                            >
+                              {costGroupBy === "master" ? (
+                                <>
+                                  <td className="px-3 py-2 font-mono text-xs font-extrabold text-slate-900">
+                                    {row.masterSku ?? "—"}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-800">
+                                    <span className="font-semibold">{row.name}</span>
+                                    {row.members && row.members.length > 0 ? (
+                                      <span className="block text-xs font-normal text-slate-500">
+                                        {row.members.length} produto(s) de canal
+                                      </span>
+                                    ) : null}
+                                  </td>
+                                </>
+                              ) : (
+                                <td className="px-3 py-2 text-slate-800">
+                                  <span className="font-semibold">{row.name}</span>
+                                  {row.productCode ? (
+                                    <span className="block text-xs font-normal text-slate-500">{row.productCode}</span>
+                                  ) : null}
+                                </td>
+                              )}
                               <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(row.unitCost)}</td>
                               <td className="px-3 py-2 text-right font-semibold tabular-nums">{row.quantity}</td>
                               <td className="px-3 py-2 text-right font-bold tabular-nums">{fmtMoney(row.totalCost)}</td>
@@ -477,7 +564,10 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                           ))}
                           {custoDetail.lines.length === 0 && (
                             <tr>
-                              <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
+                              <td
+                                colSpan={costGroupBy === "master" ? 5 : 4}
+                                className="px-3 py-6 text-center text-slate-500"
+                              >
                                 Nenhuma linha de pedido no período.
                               </td>
                             </tr>

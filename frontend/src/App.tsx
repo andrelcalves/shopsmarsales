@@ -8,7 +8,9 @@ import Products from './Products';
 import Simulation from './Simulation';
 import SimulationGrossRevenue, { type GrossRevenueNavParams } from './SimulationGrossRevenue';
 import PaymentTypeFees from './PaymentTypeFees';
-import Stock from './Stock';
+import StockOverview from './StockOverview';
+import StockLaunch from './StockLaunch';
+import MasterProducts from './MasterProducts';
 import BillsToPay from './BillsToPay';
 import SalesByDayDashboard from './SalesByDayDashboard';
 import BillsDashboard from './BillsDashboard';
@@ -45,7 +47,7 @@ type OrderUploadSource = 'shopee' | 'tiktok' | 'tray' | 'tray_atacado' | 'tray_v
 
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock' | 'simulation' | 'simulation_gross_revenue' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'shopee_duplicates' | 'product_curve' | 'returns'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock_overview' | 'stock_launch' | 'master_products' | 'simulation' | 'simulation_gross_revenue' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'shopee_duplicates' | 'product_curve' | 'returns'>('upload');
   const [grossRevenueParams, setGrossRevenueParams] = useState<GrossRevenueNavParams | null>(null);
 
   // --- LÓGICA DA TELA DE UPLOAD ---
@@ -231,8 +233,12 @@ function App() {
                               ? 'Produtos'
                               : currentView === 'payment_type_fees'
                                 ? 'Taxas Tray'
-                                : currentView === 'stock'
+                                : currentView === 'stock_overview'
                                   ? 'Estoque'
+                                  : currentView === 'stock_launch'
+                                    ? 'Lançar estoque'
+                                    : currentView === 'master_products'
+                                      ? 'Produtos mestre'
                                   : currentView === 'bills_to_pay'
                                     ? 'Cadastro contas'
                                     : currentView === 'pricing'
@@ -294,6 +300,15 @@ function App() {
                   )}
                 >
                   Custo ADS
+                </button>
+                <button
+                  onClick={() => setCurrentView('stock_overview')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'stock_overview' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Estoque
                 </button>
                 <button
                   onClick={() => setCurrentView('product_curve')}
@@ -368,13 +383,22 @@ function App() {
                   Taxas Tray
                 </button>
                 <button
-                  onClick={() => setCurrentView('stock')}
+                  onClick={() => setCurrentView('stock_launch')}
                   className={cn(
                     'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'stock' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                    currentView === 'stock_launch' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
                   )}
                 >
-                  Estoque
+                  Lançar estoque
+                </button>
+                <button
+                  onClick={() => setCurrentView('master_products')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'master_products' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Produtos mestre
                 </button>
                 <button
                   onClick={() => setCurrentView('bills_to_pay')}
@@ -442,8 +466,12 @@ function App() {
         <Products />
       ) : currentView === 'payment_type_fees' ? (
         <PaymentTypeFees />
-      ) : currentView === 'stock' ? (
-        <Stock />
+      ) : currentView === 'stock_overview' ? (
+        <StockOverview />
+      ) : currentView === 'stock_launch' ? (
+        <StockLaunch />
+      ) : currentView === 'master_products' ? (
+        <MasterProducts />
       ) : currentView === 'bills_to_pay' ? (
         <BillsToPay />
       ) : currentView === 'pricing' ? (
