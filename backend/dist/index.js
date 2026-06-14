@@ -9,9 +9,11 @@ import util from 'util';
 import { createRequire } from 'module';
 import * as shopeeApi from './shopeeApi.js';
 import { parseTikTokIncomeReport } from './tiktokIncome.js';
+import { parseTikTokOnholdReport } from './tiktokOnhold.js';
 import { buildProductCostLookup, effectiveCostDisplay, getLatestCostEntry, } from './productCost.js';
 import { resolveCombinedCost, } from './masterProductCost.js';
 import { registerMasterProductRoutes, loadCombinedCostLookup, buildMasterStockCurrent, } from './masterProductRoutes.js';
+import { computeSimulationMetrics, computeContributionDashboard } from './simulationMetrics.js';
 function parseDateOnly(dateStr) {
     const s = String(dateStr ?? '').trim();
     if (!s)
@@ -565,12 +567,15 @@ function mapOrderToGrossRevenueRow(o) {
     const settlementFromIncome = o.settlementAmount != null && Number(o.settlementAmount) > 0
         ? roundMoney(Number(o.settlementAmount))
         : null;
+    const estimatedFromOnhold = o.estimatedSettlementAmount != null && Number(o.estimatedSettlementAmount) > 0
+        ? roundMoney(Number(o.estimatedSettlementAmount))
+        : null;
     const amountReceived = settlementFromIncome;
-    // Com income importado, o valor liquidado do TikTok é a referência (não total do CSV − taxas)
-    const amountToReceive = settlementFromIncome != null
-        ? settlementFromIncome
-        : roundMoney(Math.max(0, orderTotal - totalFees));
-    const isSettled = amountReceived != null;
+    const amountToReceive = settlementFromIncome ??
+        estimatedFromOnhold ??
+        roundMoney(Math.max(0, orderTotal - totalFees));
+    const isSettled = settlementFromIncome != null;
+    const isEstimatedSettlement = !isSettled && estimatedFromOnhold != null;
     const paymentId = String(o.paymentId ?? '').trim() || null;
     return {
         orderId: o.orderId,
@@ -586,6 +591,7 @@ function mapOrderToGrossRevenueRow(o) {
         amountToReceive,
         amountReceived,
         isSettled,
+        isEstimatedSettlement,
         orderTotal,
         items,
         unitsInOrder: items.reduce((s, it) => s + it.quantity, 0),
@@ -1629,7 +1635,7 @@ async function main() {
             }
         });
     });
-    // Importação income / liquidação TikTok Shop (xlsx, aba Detalhes do pedido)
+    // Importação income / onhold TikTok Shop (xlsx, auto-detecção de aba)
     // POST /api/tiktok/income/import (multipart: file)
     app.post('/api/tiktok/income/import', (req, res) => {
         const form = formidable({ multiples: false, keepExtensions: true });
@@ -1645,70 +1651,155 @@ async function main() {
                     return res.status(400).json({ message: 'Caminho do arquivo não encontrado.' });
                 const dryRunRaw = String(first(_fields.dryRun) ?? '').trim().toLowerCase();
                 const dryRun = dryRunRaw === '1' || dryRunRaw === 'true' || dryRunRaw === 'yes';
-                const { orders, rawRows, orderRows, message } = parseTikTokIncomeReport(filepath);
-                if (message)
-                    return res.status(400).json({ message });
-                if (orders.length === 0) {
+                const incomeResult = parseTikTokIncomeReport(filepath);
+                if (!incomeResult.message) {
+                    const { orders: settledOrders, rawRows, orderRows } = incomeResult;
+                    if (settledOrders.length === 0) {
+                        return res.status(200).json({
+                            message: 'Nenhum pedido liquidado encontrado na aba Detalhes do pedido.',
+                            importType: 'settled',
+                            dryRun,
+                            rawRows,
+                            orderRows,
+                            matched: 0,
+                            notFound: 0,
+                            updated: 0,
+                            skippedSettled: 0,
+                        });
+                    }
+                    const orderIds = settledOrders.map((o) => o.orderId);
+                    const existing = await prisma.order.findMany({
+                        where: { source: 'tiktok', orderId: { in: orderIds } },
+                        select: { orderId: true },
+                    });
+                    const existingSet = new Set(existing.map((o) => o.orderId));
+                    let updated = 0;
+                    const notFoundIds = [];
+                    if (!dryRun) {
+                        for (const row of settledOrders) {
+                            if (!existingSet.has(row.orderId)) {
+                                notFoundIds.push(row.orderId);
+                                continue;
+                            }
+                            await prisma.order.update({
+                                where: { orderId_source: { orderId: row.orderId, source: 'tiktok' } },
+                                data: {
+                                    settlementAmount: row.settlementAmount,
+                                    commissionFee: row.commissionFee,
+                                    serviceFee: row.serviceFee,
+                                    partnerCommission: row.partnerCommission,
+                                    paymentId: row.paymentId || '',
+                                    estimatedSettlementAmount: null,
+                                },
+                            });
+                            updated++;
+                        }
+                    }
+                    const matched = settledOrders.filter((o) => existingSet.has(o.orderId)).length;
+                    const notFound = settledOrders.length - matched;
                     return res.status(200).json({
-                        message: 'Nenhum pedido liquidado encontrado na aba Detalhes do pedido.',
+                        message: dryRun
+                            ? 'Pré-visualização concluída (liquidados).'
+                            : `Liquidação TikTok aplicada em ${updated} pedido(s).`,
+                        importType: 'settled',
                         dryRun,
                         rawRows,
                         orderRows,
+                        ordersInFile: settledOrders.length,
+                        matched,
+                        notFound,
+                        updated: dryRun ? 0 : updated,
+                        skippedSettled: 0,
+                        notFoundSample: notFoundIds.slice(0, 20),
+                        preview: dryRun
+                            ? settledOrders.slice(0, 10).map((o) => ({
+                                orderId: o.orderId,
+                                paymentId: o.paymentId,
+                                settlementAmount: o.settlementAmount,
+                                commissionFee: o.commissionFee,
+                                serviceFee: o.serviceFee,
+                                partnerCommission: o.partnerCommission,
+                                exists: existingSet.has(o.orderId),
+                            }))
+                            : undefined,
+                    });
+                }
+                const onholdResult = parseTikTokOnholdReport(filepath);
+                if (onholdResult.message) {
+                    return res.status(400).json({
+                        message: `${incomeResult.message} ${onholdResult.message}`.trim(),
+                    });
+                }
+                if (onholdResult.orders.length === 0) {
+                    return res.status(200).json({
+                        message: 'Nenhum pedido encontrado. Use income (aba Detalhes do pedido) ou onhold (Pedidos não liquidados e ajuste).',
+                        importType: 'onhold',
+                        dryRun,
+                        rawRows: onholdResult.rawRows,
+                        orderRows: onholdResult.orderRows,
                         matched: 0,
                         notFound: 0,
                         updated: 0,
+                        skippedSettled: 0,
                     });
                 }
-                const orderIds = orders.map((o) => o.orderId);
+                const orderIds = onholdResult.orders.map((o) => o.orderId);
                 const existing = await prisma.order.findMany({
                     where: { source: 'tiktok', orderId: { in: orderIds } },
-                    select: { orderId: true },
+                    select: { orderId: true, settlementAmount: true },
                 });
-                const existingSet = new Set(existing.map((o) => o.orderId));
+                const existingMap = new Map(existing.map((o) => [o.orderId, o]));
                 let updated = 0;
+                let skippedSettled = 0;
                 const notFoundIds = [];
                 if (!dryRun) {
-                    for (const row of orders) {
-                        if (!existingSet.has(row.orderId)) {
+                    for (const row of onholdResult.orders) {
+                        const ex = existingMap.get(row.orderId);
+                        if (!ex) {
                             notFoundIds.push(row.orderId);
+                            continue;
+                        }
+                        if (ex.settlementAmount != null && Number(ex.settlementAmount) > 0) {
+                            skippedSettled++;
                             continue;
                         }
                         await prisma.order.update({
                             where: { orderId_source: { orderId: row.orderId, source: 'tiktok' } },
                             data: {
-                                settlementAmount: row.settlementAmount,
+                                estimatedSettlementAmount: row.estimatedSettlementAmount,
                                 commissionFee: row.commissionFee,
                                 serviceFee: row.serviceFee,
                                 partnerCommission: row.partnerCommission,
-                                paymentId: row.paymentId || '',
                             },
                         });
                         updated++;
                     }
                 }
-                const matched = orders.filter((o) => existingSet.has(o.orderId)).length;
-                const notFound = orders.length - matched;
+                const matched = onholdResult.orders.filter((o) => existingMap.has(o.orderId)).length;
+                const notFound = onholdResult.orders.length - matched;
                 return res.status(200).json({
                     message: dryRun
-                        ? 'Pré-visualização concluída.'
-                        : `Liquidação TikTok aplicada em ${updated} pedido(s).`,
+                        ? 'Pré-visualização concluída (onhold).'
+                        : `Previsão onhold aplicada em ${updated} pedido(s).`,
+                    importType: 'onhold',
                     dryRun,
-                    rawRows,
-                    orderRows,
-                    ordersInFile: orders.length,
+                    rawRows: onholdResult.rawRows,
+                    orderRows: onholdResult.orderRows,
+                    ordersInFile: onholdResult.orders.length,
                     matched,
                     notFound,
                     updated: dryRun ? 0 : updated,
+                    skippedSettled: dryRun ? 0 : skippedSettled,
                     notFoundSample: notFoundIds.slice(0, 20),
                     preview: dryRun
-                        ? orders.slice(0, 10).map((o) => ({
+                        ? onholdResult.orders.slice(0, 10).map((o) => ({
                             orderId: o.orderId,
-                            paymentId: o.paymentId,
-                            settlementAmount: o.settlementAmount,
+                            estimatedSettlementAmount: o.estimatedSettlementAmount,
                             commissionFee: o.commissionFee,
                             serviceFee: o.serviceFee,
                             partnerCommission: o.partnerCommission,
-                            exists: existingSet.has(o.orderId),
+                            exists: existingMap.has(o.orderId),
+                            skippedSettled: (existingMap.get(o.orderId)?.settlementAmount ?? 0) > 0,
                         }))
                         : undefined,
                 });
@@ -2073,13 +2164,51 @@ async function main() {
     app.get('/api/bills', async (req, res) => {
         try {
             const status = typeof req.query.status === 'string' ? req.query.status.trim() : undefined;
+            const monthStr = typeof req.query.month === 'string' ? req.query.month.trim() : undefined;
+            const paymentStatus = typeof req.query.paymentStatus === 'string' ? req.query.paymentStatus.trim().toLowerCase() : undefined;
+            const isFixedCostRaw = typeof req.query.isFixedCost === 'string' ? req.query.isFixedCost.trim().toLowerCase() : undefined;
+            const description = typeof req.query.description === 'string' ? req.query.description.trim() : undefined;
             const prismaAny = prisma;
-            const where = status ? { status } : {};
-            const bills = await prismaAny.bill.findMany({
+            const where = {};
+            if (status)
+                where.status = status;
+            if (isFixedCostRaw === 'true')
+                where.isFixedCost = true;
+            if (isFixedCostRaw === 'false')
+                where.isFixedCost = false;
+            if (description)
+                where.description = { contains: description, mode: 'insensitive' };
+            let monthStart = null;
+            let monthEnd = null;
+            if (monthStr) {
+                const m = monthStr.match(/^(\d{4})-(\d{2})$/);
+                if (m) {
+                    monthStart = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, 1);
+                    monthEnd = new Date(parseInt(m[1], 10), parseInt(m[2], 10), 1);
+                }
+            }
+            const paymentWhere = {};
+            if (monthStart && monthEnd) {
+                paymentWhere.dueDate = { gte: monthStart, lt: monthEnd };
+            }
+            if (paymentStatus === 'paid')
+                paymentWhere.paidAt = { not: null };
+            if (paymentStatus === 'pending')
+                paymentWhere.paidAt = null;
+            const hasPaymentFilter = Object.keys(paymentWhere).length > 0;
+            let bills = await prismaAny.bill.findMany({
                 where,
-                include: { payments: { orderBy: { dueDate: 'asc' } } },
+                include: {
+                    payments: {
+                        where: hasPaymentFilter ? paymentWhere : undefined,
+                        orderBy: { dueDate: 'asc' },
+                    },
+                },
                 orderBy: { createdAt: 'desc' },
             });
+            if (hasPaymentFilter) {
+                bills = bills.filter((b) => (b.payments?.length ?? 0) > 0);
+            }
             return res.status(200).json(bills);
         }
         catch (e) {
@@ -2426,141 +2555,31 @@ async function main() {
         try {
             const monthStr = String(req.query.month ?? '').trim();
             const channel = String(req.query.channel ?? 'all').trim().toLowerCase();
-            const taxPercent = 5;
-            const monthStart = monthStartFromYYYYMM(monthStr);
-            if (!monthStart)
+            const result = await computeSimulationMetrics(prisma, monthStr, channel);
+            if (!result)
                 return res.status(400).json({ message: 'Parâmetro month inválido (use YYYY-MM).' });
-            const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
-            const orderWhere = buildSimulationOrderWhere(monthStart, channel);
-            const orders = await prisma.order.findMany({
-                where: orderWhere,
-                include: { items: { include: { product: true } } },
-            });
-            const totalRevenue = orders.reduce((s, o) => s + (o.totalPrice || 0), 0);
-            const isTrayChannelFilter = channel === 'tray' || channel === TRAY_SOURCE_ATACADO || channel === TRAY_SOURCE_VAREJO;
-            const shopeeFees = isTrayChannelFilter || channel === 'tiktok' ? 0 : orders
-                .filter((o) => o.source === 'shopee')
-                .reduce((s, o) => s + (o.commissionFee || 0) + (o.serviceFee || 0), 0);
-            const tiktokFees = isTrayChannelFilter || channel === 'shopee' ? 0 : orders
-                .filter((o) => o.source === 'tiktok')
-                .reduce((s, o) => s +
-                (o.commissionFee || 0) +
-                (o.serviceFee || 0) +
-                (o.partnerCommission || 0), 0);
-            const trayOrders = orders.filter((o) => isTrayOrderSource(o.source));
-            const feePercentFor = (feeByCh, ch, pt) => {
-                const trimmed = String(pt || '').trim();
-                return (feeByCh.get(ch)?.get(trimmed) ??
-                    feeByCh.get('tray')?.get(trimmed) ??
-                    0);
-            };
-            let cardPix = 0;
-            const prismaAnySim = prisma;
-            if (isTrayChannelFilter || channel === 'all') {
-                const feeRows = await prismaAnySim.paymentTypeFee.findMany({
-                    where: {
-                        month: monthStart,
-                        channel: { in: ['tray', TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO] },
-                    },
-                });
-                const feeByCh = new Map();
-                for (const r of feeRows) {
-                    const ch = String(r.channel || '').trim().toLowerCase();
-                    if (!feeByCh.has(ch))
-                        feeByCh.set(ch, new Map());
-                    feeByCh.get(ch).set(String(r.paymentType || '').trim(), Number(r.percent || 0));
-                }
-                for (const o of trayOrders) {
-                    const pt = String(o.paymentType || '').trim();
-                    const feeCh = feeChannelForTrayOrder(o.source, o.orderId);
-                    const pct = feePercentFor(feeByCh, feeCh, pt);
-                    cardPix += (o.totalPrice || 0) * (pct / 100);
-                }
-            }
-            const freight = isTrayChannelFilter || channel === 'all'
-                ? orders.filter((o) => isTrayOrderSource(o.source)).reduce((s, o) => s + (o.freight || 0), 0)
-                : 0;
-            const simProductIds = collectProductIdsFromOrders(orders);
-            const simCombined = await loadCombinedCostLookup(prismaAny, simProductIds);
-            const productionCost = orders.reduce((s, o) => {
-                const orderDate = new Date(o.orderDate);
-                for (const item of o.items) {
-                    const unitCost = resolveCombinedCost(simCombined, item.productId, orderDate, item.product?.costPrice);
-                    s += unitCost * (item.quantity || 0);
-                }
-                return s;
-            }, 0);
-            const adSpendWhere = {
-                month: { gte: monthStart, lt: monthEnd },
-            };
-            if (channel !== 'all') {
-                if (channel === 'tray') {
-                    adSpendWhere.channel = { in: ['tray', TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO] };
-                }
-                else {
-                    adSpendWhere.channel = channel;
-                }
-            }
-            const adSpendRows = await prismaAnySim.adSpend.findMany({
-                where: adSpendWhere,
-            });
-            const adsSpend = adSpendRows.reduce((s, r) => s + Number(r.amount || 0), 0);
-            // Fixed cost from Bills with isFixedCost=true, summing BillPayment.amount due in the month
-            const fixedCostPayments = await prisma.billPayment.findMany({
-                where: {
-                    dueDate: { gte: monthStart, lt: monthEnd },
-                    bill: { isFixedCost: true },
-                },
-                include: { bill: true },
-            });
-            const fixedCost = fixedCostPayments.reduce((s, p) => s + Number(p.amount || 0), 0);
-            const allOrdersForProportion = channel !== 'all'
-                ? await prisma.order.findMany({
-                    where: {
-                        orderDate: { gte: monthStart, lt: monthEnd },
-                        NOT: [...ORDER_STATUS_EXCLUDED_FROM_SALES_METRICS],
-                    },
-                })
-                : orders;
-            const totalRevenueAll = allOrdersForProportion.reduce((s, o) => s + (o.totalPrice || 0), 0);
-            const fixedCostProportional = totalRevenueAll > 0 && channel !== 'all'
-                ? fixedCost * (totalRevenue / totalRevenueAll)
-                : fixedCost;
-            const tax = totalRevenue * (taxPercent / 100);
-            const variableCosts = adsSpend + shopeeFees + tiktokFees + cardPix + freight + productionCost + tax;
-            const contributionMargin = totalRevenue - variableCosts;
-            const contributionMarginPercent = totalRevenue > 0 ? (contributionMargin / totalRevenue) * 100 : 0;
-            const profit = contributionMargin - fixedCostProportional;
-            const margin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
-            return res.status(200).json({
-                month: monthStr,
-                channel,
-                faturamentoBruto: Number(totalRevenue.toFixed(2)),
-                adsInvestimento: Number(adsSpend.toFixed(2)),
-                adsPercent: totalRevenue > 0 ? Number((adsSpend / totalRevenue * 100).toFixed(2)) : 0,
-                taxasShopee: Number(shopeeFees.toFixed(2)),
-                taxasShopeePercent: totalRevenue > 0 ? Number((shopeeFees / totalRevenue * 100).toFixed(2)) : 0,
-                taxasTiktok: Number(tiktokFees.toFixed(2)),
-                taxasTiktokPercent: totalRevenue > 0 ? Number((tiktokFees / totalRevenue * 100).toFixed(2)) : 0,
-                taxasCartaoPix: Number(cardPix.toFixed(2)),
-                taxasCartaoPixPercent: totalRevenue > 0 ? Number((cardPix / totalRevenue * 100).toFixed(2)) : 0,
-                frete: Number(freight.toFixed(2)),
-                fretePercent: totalRevenue > 0 ? Number((freight / totalRevenue * 100).toFixed(2)) : 0,
-                custoProducao: Number(productionCost.toFixed(2)),
-                custoProducaoPercent: totalRevenue > 0 ? Number((productionCost / totalRevenue * 100).toFixed(2)) : 0,
-                custoFixo: Number(fixedCostProportional.toFixed(2)),
-                custoFixoPercent: totalRevenue > 0 ? Number((fixedCostProportional / totalRevenue * 100).toFixed(2)) : 0,
-                imposto: Number(tax.toFixed(2)),
-                impostoPercent: taxPercent,
-                margemContribuicao: Number(contributionMargin.toFixed(2)),
-                margemContribuicaoPercent: Number(contributionMarginPercent.toFixed(2)),
-                lucroLiquido: Number(profit.toFixed(2)),
-                margemLucro: Number(margin.toFixed(2)),
-            });
+            return res.status(200).json(result);
         }
         catch (e) {
             console.error(e);
             return res.status(500).json({ message: 'Erro ao calcular simulação.' });
+        }
+    });
+    // Dashboard margem de contribuição por canal (mês a mês)
+    // GET /api/contribution-dashboard?from=2026-01&to=2026-06
+    app.get('/api/contribution-dashboard', async (req, res) => {
+        try {
+            const from = String(req.query.from ?? '').trim();
+            const to = String(req.query.to ?? '').trim();
+            if (!from || !to) {
+                return res.status(400).json({ message: 'Parâmetros from e to são obrigatórios (YYYY-MM).' });
+            }
+            const result = await computeContributionDashboard(prisma, from, to);
+            return res.status(200).json(result);
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao calcular dashboard de margem.' });
         }
     });
     // Detalhe do custo de produção da simulação (agregado por produto mestre ou por produto de canal)
@@ -2738,6 +2757,8 @@ async function main() {
                 serviceFee: o.serviceFee,
                 partnerCommission: o.partnerCommission,
                 settlementAmount: o.settlementAmount,
+                estimatedSettlementAmount: o
+                    .estimatedSettlementAmount,
                 paymentId: o.paymentId,
                 items: o.items,
             }));

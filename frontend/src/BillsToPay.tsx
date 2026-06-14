@@ -49,6 +49,10 @@ export default function BillsToPay() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("");
+  const [filterMonth, setFilterMonth] = useState<string>("");
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState<string>("");
+  const [filterFixedCost, setFilterFixedCost] = useState<string>("");
+  const [filterDescription, setFilterDescription] = useState<string>("");
 
   const [description, setDescription] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
@@ -73,9 +77,14 @@ export default function BillsToPay() {
   async function fetchBills() {
     setLoading(true);
     try {
-      const url = filterStatus
-        ? `${API_URL}/api/bills?status=${encodeURIComponent(filterStatus)}`
-        : `${API_URL}/api/bills`;
+      const qs = new URLSearchParams();
+      if (filterStatus) qs.set("status", filterStatus);
+      if (filterMonth) qs.set("month", filterMonth);
+      if (filterPaymentStatus) qs.set("paymentStatus", filterPaymentStatus);
+      if (filterFixedCost) qs.set("isFixedCost", filterFixedCost);
+      if (filterDescription.trim()) qs.set("description", filterDescription.trim());
+      const q = qs.toString();
+      const url = `${API_URL}/api/bills${q ? `?${q}` : ""}`;
       const res = await fetch(url);
       const data = await res.json();
       setBills(Array.isArray(data) ? data : []);
@@ -89,7 +98,7 @@ export default function BillsToPay() {
 
   useEffect(() => {
     fetchBills();
-  }, [filterStatus]);
+  }, [filterStatus, filterMonth, filterPaymentStatus, filterFixedCost, filterDescription]);
 
   async function createBill(e: React.FormEvent) {
     e.preventDefault();
@@ -299,26 +308,87 @@ export default function BillsToPay() {
         </div>
 
         <div className={cn(UI.card, "overflow-hidden")}>
-          <div className="px-6 pt-6 flex items-center justify-between flex-wrap gap-4">
-            <div className="flex items-center gap-3">
+          <div className="px-6 pt-6 space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-4">
               <h3 className="text-sm font-extrabold tracking-wide text-slate-900">Lista de contas</h3>
-              <select
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+              <button
+                onClick={fetchBills}
+                className="rounded-xl bg-white px-4 py-2 text-sm font-extrabold text-slate-900 shadow-sm border border-slate-200 hover:bg-slate-50 transition"
               >
-                <option value="">Todas</option>
-                <option value="pending">Pendentes</option>
-                <option value="partial">Parcialmente pagas</option>
-                <option value="paid">Pagas</option>
-              </select>
+                Atualizar
+              </button>
             </div>
-            <button
-              onClick={fetchBills}
-              className="rounded-xl bg-white px-4 py-2 text-sm font-extrabold text-slate-900 shadow-sm border border-slate-200 hover:bg-slate-50 transition"
-            >
-              Atualizar
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Mês</label>
+                <input
+                  type="month"
+                  value={filterMonth}
+                  onChange={(e) => setFilterMonth(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                />
+                {filterMonth && (
+                  <button
+                    type="button"
+                    onClick={() => setFilterMonth("")}
+                    className="mt-1 text-xs font-bold text-sky-600 hover:underline"
+                  >
+                    Limpar mês
+                  </button>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
+                  Status parcela
+                </label>
+                <select
+                  value={filterPaymentStatus}
+                  onChange={(e) => setFilterPaymentStatus(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                >
+                  <option value="">Todas</option>
+                  <option value="pending">Pendente</option>
+                  <option value="paid">Pago</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
+                  Status conta
+                </label>
+                <select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                >
+                  <option value="">Todas</option>
+                  <option value="pending">Pendentes</option>
+                  <option value="partial">Parcialmente pagas</option>
+                  <option value="paid">Pagas</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Custo fixo</label>
+                <select
+                  value={filterFixedCost}
+                  onChange={(e) => setFilterFixedCost(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                >
+                  <option value="">Todos</option>
+                  <option value="true">Sim</option>
+                  <option value="false">Não</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Descrição</label>
+                <input
+                  type="text"
+                  value={filterDescription}
+                  onChange={(e) => setFilterDescription(e.target.value)}
+                  placeholder="Buscar..."
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                />
+              </div>
+            </div>
           </div>
 
           <div className="p-6 flex flex-col lg:flex-row gap-6">

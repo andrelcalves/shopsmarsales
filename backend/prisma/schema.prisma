@@ -25,6 +25,7 @@ model Order {
   commissionFee Float?  // Net Commission Fee (taxa de comissão líquida)
   serviceFee    Float?  // Taxa de serviço bruta
   settlementAmount  Float?  // Valor liquidado (relatório income TikTok)
+  estimatedSettlementAmount Float?  // Valor estimado a liquidar (relatório onhold TikTok)
   partnerCommission Float?  // Comissões afiliados/criadores/agências (income TikTok)
   paymentId         String? @default("")  // ID do pagamento (income TikTok)
   freight       Float?  // Frete (apenas canal tray)

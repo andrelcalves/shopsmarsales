@@ -4,6 +4,7 @@ import './App.css';
 import Dashboard from './Dashboard';
 import AdsSpend from './AdsSpend';
 import AdsDashboard from './AdsDashboard';
+import ContributionDashboard from './ContributionDashboard';
 import Products from './Products';
 import Simulation from './Simulation';
 import SimulationGrossRevenue, { type GrossRevenueNavParams } from './SimulationGrossRevenue';
@@ -47,7 +48,7 @@ type OrderUploadSource = 'shopee' | 'tiktok' | 'tray' | 'tray_atacado' | 'tray_v
 
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock_overview' | 'stock_launch' | 'master_products' | 'simulation' | 'simulation_gross_revenue' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'shopee_duplicates' | 'product_curve' | 'returns'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'contribution_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock_overview' | 'stock_launch' | 'master_products' | 'simulation' | 'simulation_gross_revenue' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'shopee_duplicates' | 'product_curve' | 'returns'>('upload');
   const [grossRevenueParams, setGrossRevenueParams] = useState<GrossRevenueNavParams | null>(null);
 
   // --- LÓGICA DA TELA DE UPLOAD ---
@@ -140,12 +141,12 @@ function App() {
   const handleTiktokIncomeSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!tiktokIncomeFile) {
-      setTiktokIncomeMessage('Por favor, selecione o relatório de income (.xlsx).');
+      setTiktokIncomeMessage('Por favor, selecione o relatório TikTok (.xlsx).');
       return;
     }
 
     setTiktokIncomeLoading(true);
-    setTiktokIncomeMessage('Enviando e processando liquidação TikTok...');
+    setTiktokIncomeMessage('Enviando e processando relatório TikTok...');
     const formData = new FormData();
     formData.append('file', tiktokIncomeFile);
 
@@ -158,14 +159,23 @@ function App() {
         message?: string;
         updated?: number;
         notFound?: number;
+        skippedSettled?: number;
+        importType?: 'settled' | 'onhold' | null;
       }>(response);
 
       if (response.ok) {
         const nf = data.notFound ?? 0;
-        const extra =
-          nf > 0
-            ? ` ${nf} pedido(s) do arquivo não existem no sistema (importe o CSV de pedidos antes).`
-            : '';
+        const skipped = data.skippedSettled ?? 0;
+        const extras: string[] = [];
+        if (nf > 0) {
+          extras.push(
+            `${nf} pedido(s) do arquivo não existem no sistema (importe o CSV de pedidos antes).`,
+          );
+        }
+        if (skipped > 0) {
+          extras.push(`${skipped} pedido(s) já liquidados foram ignorados.`);
+        }
+        const extra = extras.length ? ` ${extras.join(' ')}` : '';
         setTiktokIncomeMessage(`${data.message} Atualizados: ${data.updated ?? 0}.${extra}`);
         fetchSales();
       } else {
@@ -227,7 +237,9 @@ function App() {
                         ? 'Contas a pagar'
                         : currentView === 'ads_dashboard'
                           ? 'Custo ADS'
-                          : currentView === 'ads_spend'
+                          : currentView === 'contribution_dashboard'
+                            ? 'Margem por Canal'
+                            : currentView === 'ads_spend'
                             ? 'Cadastro ADS'
                             : currentView === 'products'
                               ? 'Produtos'
@@ -300,6 +312,15 @@ function App() {
                   )}
                 >
                   Custo ADS
+                </button>
+                <button
+                  onClick={() => setCurrentView('contribution_dashboard')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'contribution_dashboard' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Margem por Canal
                 </button>
                 <button
                   onClick={() => setCurrentView('stock_overview')}
@@ -460,6 +481,8 @@ function App() {
         <BillsDashboard />
       ) : currentView === 'ads_dashboard' ? (
         <AdsDashboard />
+      ) : currentView === 'contribution_dashboard' ? (
+        <ContributionDashboard />
       ) : currentView === 'ads_spend' ? (
         <AdsSpend />
       ) : currentView === 'products' ? (
@@ -624,16 +647,17 @@ function App() {
             <div>
               <h2 className="text-lg font-black tracking-tight text-slate-900">Income / Liquidação TikTok Shop</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Apenas relatório de receitas do <span className="font-bold">TikTok Shop</span> (
-                <span className="font-bold">.xlsx</span>, aba <span className="font-bold">Detalhes do pedido</span>).
-                Arquivos da <span className="font-bold">Shopee</span> não são suportados aqui — use a importação de
-                pedidos Shopee (CSV) para taxas no pedido, ou Cadastro ADS para recargas da carteira.
+                Relatório de receitas do <span className="font-bold">TikTok Shop</span> (
+                <span className="font-bold">.xlsx</span>): liquidação paga (aba{' '}
+                <span className="font-bold">Detalhes do pedido</span>) ou pendentes onhold (aba{' '}
+                <span className="font-bold">Pedidos não liquidados e ajuste</span>). O sistema detecta
+                automaticamente o tipo de arquivo.
               </p>
             </div>
 
             <form onSubmit={handleTiktokIncomeSubmit} className="mt-5 grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
               <div className="md:col-span-9">
-                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Arquivo income</label>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Arquivo TikTok (.xlsx)</label>
                 <input
                   type="file"
                   onChange={handleTiktokIncomeFileChange}
@@ -652,7 +676,7 @@ function App() {
                       : 'bg-slate-200 text-slate-500 cursor-not-allowed'
                   )}
                 >
-                  {tiktokIncomeLoading ? 'Processando...' : 'Importar liquidação'}
+                  {tiktokIncomeLoading ? 'Processando...' : 'Importar relatório'}
                 </button>
               </div>
             </form>

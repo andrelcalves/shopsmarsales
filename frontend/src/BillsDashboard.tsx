@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LabelList } from "recharts";
 import { RefreshCcw, CreditCard } from "lucide-react";
 
-import { API_URL } from './config';
+import { API_URL } from "./config";
 
 type BillPayment = {
   id: number;
@@ -20,6 +20,7 @@ type Bill = {
   totalAmount: number;
   dueDate: string | null;
   status: string;
+  isFixedCost?: boolean;
   payments: BillPayment[];
 };
 
@@ -58,16 +59,47 @@ function monthLabel(key: string): string {
   return d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 }
 
-type PaymentWithBill = BillPayment & { billDescription: string };
+function defaultMonth(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+type PaymentWithBill = BillPayment & { billDescription: string; isFixedCost: boolean };
+
+function buildBillsUrl(filters: {
+  month: string;
+  paymentStatus: string;
+  isFixedCost: string;
+  description: string;
+}): string {
+  const qs = new URLSearchParams();
+  if (filters.month) qs.set("month", filters.month);
+  if (filters.paymentStatus) qs.set("paymentStatus", filters.paymentStatus);
+  if (filters.isFixedCost) qs.set("isFixedCost", filters.isFixedCost);
+  if (filters.description.trim()) qs.set("description", filters.description.trim());
+  const q = qs.toString();
+  return `${API_URL}/api/bills${q ? `?${q}` : ""}`;
+}
 
 export default function BillsDashboard() {
   const [bills, setBills] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filterMonth, setFilterMonth] = useState(defaultMonth);
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState("");
+  const [filterFixedCost, setFilterFixedCost] = useState("");
+  const [filterDescription, setFilterDescription] = useState("");
 
-  const fetchBills = async () => {
+  const fetchBills = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/bills`);
+      const res = await fetch(
+        buildBillsUrl({
+          month: filterMonth,
+          paymentStatus: filterPaymentStatus,
+          isFixedCost: filterFixedCost,
+          description: filterDescription,
+        }),
+      );
       const data = await res.json();
       setBills(Array.isArray(data) ? data : []);
     } catch (e) {
@@ -76,11 +108,11 @@ export default function BillsDashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [filterMonth, filterPaymentStatus, filterFixedCost, filterDescription]);
 
   useEffect(() => {
     fetchBills();
-  }, []);
+  }, [fetchBills]);
 
   const { byMonth, chartData, monthsSorted } = useMemo(() => {
     const byMonth = new Map<string, { total: number; pending: number; paid: number; payments: PaymentWithBill[] }>();
@@ -94,7 +126,11 @@ export default function BillsDashboard() {
         row.total += p.amount;
         if (p.paidAt) row.paid += p.amount;
         else row.pending += p.amount;
-        row.payments.push({ ...p, billDescription: bill.description });
+        row.payments.push({
+          ...p,
+          billDescription: bill.description,
+          isFixedCost: bill.isFixedCost === true,
+        });
       }
     }
     const monthsSorted = Array.from(byMonth.keys()).sort();
@@ -110,6 +146,22 @@ export default function BillsDashboard() {
       };
     });
     return { byMonth, chartData, monthsSorted };
+  }, [bills]);
+
+  const summary = useMemo(() => {
+    let total = 0;
+    let pending = 0;
+    let paid = 0;
+    let count = 0;
+    for (const bill of bills) {
+      for (const p of bill.payments || []) {
+        total += p.amount;
+        if (p.paidAt) paid += p.amount;
+        else pending += p.amount;
+        count += 1;
+      }
+    }
+    return { total, pending, paid, count };
   }, [bills]);
 
   return (
@@ -133,6 +185,75 @@ export default function BillsDashboard() {
               Atualizar
             </button>
           </div>
+
+          <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+            <div>
+              <label className="text-[10px] font-bold uppercase text-white/70 tracking-wide">Mês</label>
+              <input
+                type="month"
+                value={filterMonth}
+                onChange={(e) => setFilterMonth(e.target.value)}
+                className="mt-1 w-full rounded-lg bg-white/15 border border-white/20 text-white text-sm font-bold px-2 py-2 outline-none [&::-webkit-calendar-picker-indicator]:invert"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-white/70 tracking-wide">Status</label>
+              <select
+                value={filterPaymentStatus}
+                onChange={(e) => setFilterPaymentStatus(e.target.value)}
+                className="mt-1 w-full rounded-lg bg-white/15 border border-white/20 text-white text-sm font-bold px-2 py-2 outline-none"
+              >
+                <option value="" className="text-slate-900">
+                  Todos
+                </option>
+                <option value="pending" className="text-slate-900">
+                  Pendente
+                </option>
+                <option value="paid" className="text-slate-900">
+                  Pago
+                </option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-white/70 tracking-wide">Custo fixo</label>
+              <select
+                value={filterFixedCost}
+                onChange={(e) => setFilterFixedCost(e.target.value)}
+                className="mt-1 w-full rounded-lg bg-white/15 border border-white/20 text-white text-sm font-bold px-2 py-2 outline-none"
+              >
+                <option value="" className="text-slate-900">
+                  Todos
+                </option>
+                <option value="true" className="text-slate-900">
+                  Sim
+                </option>
+                <option value="false" className="text-slate-900">
+                  Não
+                </option>
+              </select>
+            </div>
+            <div className="sm:col-span-2 lg:col-span-2">
+              <label className="text-[10px] font-bold uppercase text-white/70 tracking-wide">Descrição</label>
+              <input
+                type="text"
+                value={filterDescription}
+                onChange={(e) => setFilterDescription(e.target.value)}
+                placeholder="Buscar por descrição..."
+                className="mt-1 w-full rounded-lg bg-white/15 border border-white/20 text-white placeholder:text-white/50 text-sm font-semibold px-3 py-2 outline-none"
+              />
+            </div>
+          </div>
+
+          {!loading && (
+            <div className="mt-4 flex flex-wrap gap-4 text-sm text-white/90">
+              <span>
+                <strong>{summary.count}</strong> parcela(s)
+              </span>
+              <span>Total: {formatMoney(summary.total)}</span>
+              <span>Pendente: {formatMoney(summary.pending)}</span>
+              <span>Pago: {formatMoney(summary.paid)}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -140,13 +261,15 @@ export default function BillsDashboard() {
         <div className={cn(UI.card, "overflow-hidden")}>
           <div className="px-6 pt-6">
             <h3 className="text-sm font-extrabold tracking-wide text-slate-900">Valores por mês</h3>
-            <p className="mt-1 text-xs text-slate-500">Total, pendente e pago por mês de vencimento</p>
+            <p className="mt-1 text-xs text-slate-500">Total, pendente e pago por mês de vencimento (filtros aplicados)</p>
           </div>
           <div className="p-6">
             {loading ? (
               <div className="h-80 flex items-center justify-center text-slate-500">Carregando...</div>
             ) : chartData.length === 0 ? (
-              <div className="h-80 flex items-center justify-center text-slate-500">Nenhuma parcela cadastrada.</div>
+              <div className="h-80 flex items-center justify-center text-slate-500">
+                Nenhuma parcela encontrada com os filtros selecionados.
+              </div>
             ) : (
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
@@ -171,7 +294,11 @@ export default function BillsDashboard() {
                         border: "1px solid #E2E8F0",
                         boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
                       }}
-                      labelFormatter={(label, payload) => payload?.[0]?.payload?.monthKey ? `${monthLabel(payload[0].payload.monthKey)} • ${payload[0].payload.count} parcela(s)` : label}
+                      labelFormatter={(label, payload) =>
+                        payload?.[0]?.payload?.monthKey
+                          ? `${monthLabel(payload[0].payload.monthKey)} • ${payload[0].payload.count} parcela(s)`
+                          : label
+                      }
                     />
                     <Bar dataKey="pending" name="Pendente" fill="#F59E0B" radius={[0, 0, 0, 0]} stackId="a" />
                     <Bar dataKey="paid" name="Pago" fill="#10B981" radius={[4, 4, 0, 0]} stackId="a">
@@ -198,7 +325,7 @@ export default function BillsDashboard() {
             {loading ? (
               <div className="text-slate-500 py-8">Carregando...</div>
             ) : monthsSorted.length === 0 ? (
-              <div className="text-slate-500 py-8">Nenhuma parcela cadastrada.</div>
+              <div className="text-slate-500 py-8">Nenhuma parcela encontrada com os filtros selecionados.</div>
             ) : (
               <div className="space-y-8">
                 {monthsSorted.map((key) => {
@@ -208,13 +335,15 @@ export default function BillsDashboard() {
                       <div className="bg-slate-100 px-4 py-3 flex flex-wrap items-center justify-between gap-2">
                         <span className="font-extrabold text-slate-900 capitalize">{monthLabel(key)}</span>
                         <span className="text-sm text-slate-600">
-                          Total: {formatMoney(row.total)} • Pendente: {formatMoney(row.pending)} • Pago: {formatMoney(row.paid)}
+                          Total: {formatMoney(row.total)} • Pendente: {formatMoney(row.pending)} • Pago:{" "}
+                          {formatMoney(row.paid)}
                         </span>
                       </div>
                       <table className="w-full text-sm">
                         <thead className="bg-slate-50 border-b border-slate-200">
                           <tr className="text-left text-xs font-extrabold tracking-widest uppercase text-slate-600">
                             <th className="px-4 py-2">Conta</th>
+                            <th className="px-4 py-2">Fixo</th>
                             <th className="px-4 py-2">Vencimento</th>
                             <th className="px-4 py-2 text-right">Valor</th>
                             <th className="px-4 py-2">Status</th>
@@ -226,8 +355,19 @@ export default function BillsDashboard() {
                             .map((p) => (
                               <tr key={p.id} className="hover:bg-slate-50">
                                 <td className="px-4 py-2 font-medium text-slate-900">{p.billDescription}</td>
+                                <td className="px-4 py-2">
+                                  {p.isFixedCost ? (
+                                    <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-800">
+                                      Sim
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 text-xs">—</span>
+                                  )}
+                                </td>
                                 <td className="px-4 py-2 text-slate-600">{dateLabel(p.dueDate)}</td>
-                                <td className="px-4 py-2 text-right font-medium text-slate-900">{formatMoney(p.amount)}</td>
+                                <td className="px-4 py-2 text-right font-medium text-slate-900">
+                                  {formatMoney(p.amount)}
+                                </td>
                                 <td className="px-4 py-2">
                                   {p.paidAt ? (
                                     <span className="text-emerald-600 font-semibold">Pago</span>

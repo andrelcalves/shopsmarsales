@@ -154,7 +154,10 @@ function formatShortDate(ymd: string): string {
 }
 
 function formatDelta(current: number, previous: number): { text: string; color: string } {
-  if (previous === 0) return { text: "—", color: "text-slate-400" };
+  if (previous === 0) {
+    if (current === 0) return { text: "—", color: "text-slate-400" };
+    return { text: "novo", color: "text-emerald-400" };
+  }
   const pct = ((current - previous) / previous) * 100;
   const sign = pct >= 0 ? "+" : "";
   return {
@@ -246,7 +249,7 @@ export default function SalesByDayDashboard() {
   const [prevRows, setPrevRows] = useState<DayRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [compare, setCompare] = useState(true);
-  const [periodMode, setPeriodMode] = useState<PeriodMode>("month_full");
+  const [periodMode, setPeriodMode] = useState<PeriodMode>("month_mtd");
   const [month, setMonth] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -542,7 +545,7 @@ export default function SalesByDayDashboard() {
                   <div className="text-slate-500 text-right text-[10px]">{row.prevTotalOrders} pedidos comp.</div>
                 )}
                 <div className="flex justify-between gap-4 py-0.5 border-t border-slate-100 pt-1">
-                  <span className="text-slate-600">Variação</span>
+                  <span className="text-slate-600">Variação faturamento</span>
                   <span className={cn("font-bold", formatDelta(row.total, row.prevTotal).color)}>
                     {formatDelta(row.total, row.prevTotal).text}
                   </span>
@@ -556,16 +559,20 @@ export default function SalesByDayDashboard() {
   };
 
   const cardItems = useMemo(() => {
-    const base: { label: string; value: number; orders: number; prev: number; channel?: ChannelId }[] = [
-      { label: "Total", value: totals.total, orders: totals.totalOrders, prev: prevTotals.total },
-    ];
+    const base: {
+      label: string;
+      revenue: number;
+      prevRevenue: number;
+      orders: number;
+      channel?: ChannelId;
+    }[] = [{ label: "Total", revenue: totals.total, prevRevenue: prevTotals.total, orders: totals.totalOrders }];
     for (const id of CHANNEL_IDS) {
       if (!selectedChannels.has(id)) continue;
       base.push({
         label: CHANNEL_LABELS[id],
-        value: totals[id],
+        revenue: totals[id],
+        prevRevenue: prevTotals[id],
         orders: totals[`${id}Orders` as keyof typeof totals] as number,
-        prev: prevTotals[id],
         channel: id,
       });
     }
@@ -758,17 +765,19 @@ export default function SalesByDayDashboard() {
             )}
           >
             {cardItems.map((card) => {
-              const delta = compare ? formatDelta(card.value, card.prev) : null;
+              const delta = compare ? formatDelta(card.revenue, card.prevRevenue) : null;
               return (
                 <div key={card.label} className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
                   <div className="text-xs text-white/80 font-semibold">{card.label}</div>
-                  <div className="text-lg font-black">{formatMoney(card.value)}</div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs text-white/70">{card.orders} pedidos</span>
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <div className="text-lg font-black">{formatMoney(card.revenue)}</div>
                     {delta && <span className={cn("text-xs font-bold", delta.color)}>{delta.text}</span>}
                   </div>
+                  <div className="text-xs text-white/70">{card.orders} pedidos</div>
                   {compare && (
-                    <div className="text-[10px] text-white/50 mt-0.5">Anterior: {formatMoney(card.prev)}</div>
+                    <div className="text-[10px] text-white/50 mt-0.5">
+                      Faturamento ant.: {formatMoney(card.prevRevenue)}
+                    </div>
                   )}
                 </div>
               );
@@ -963,7 +972,7 @@ export default function SalesByDayDashboard() {
                       {compare && (
                         <>
                           <th className="px-4 py-3 text-right text-purple-600">Total comp.</th>
-                          <th className="px-4 py-3 text-right">Variação</th>
+                          <th className="px-4 py-3 text-right">Var. faturamento</th>
                         </>
                       )}
                     </tr>

@@ -63,6 +63,7 @@ type GrossRevenueOrder = {
   amountToReceive: number;
   amountReceived: number | null;
   isSettled: boolean;
+  isEstimatedSettlement?: boolean;
   orderTotal: number;
   items: GrossRevenueItem[];
   unitsInOrder: number;
@@ -162,6 +163,8 @@ export default function SimulationGrossRevenue({ initialParams, onBack }: Props)
   }
 
   const settledCount = data?.orders.filter((o) => o.isSettled).length ?? 0;
+  const estimatedCount =
+    data?.orders.filter((o) => o.isEstimatedSettlement && !o.isSettled).length ?? 0;
 
   return (
     <div className={cn(UI.bg, "min-h-screen")}>
@@ -279,6 +282,10 @@ export default function SimulationGrossRevenue({ initialParams, onBack }: Props)
                 <span className="text-slate-400"> / {data.totalOrders}</span>
               </span>
               <span>
+                <span className="text-slate-500">Com previsão: </span>
+                <span className="font-extrabold text-amber-700">{estimatedCount}</span>
+              </span>
+              <span>
                 <span className="text-slate-500">Unidades vendidas: </span>
                 <span className="font-extrabold text-slate-900">{data.totalProductUnits}</span>
               </span>
@@ -366,6 +373,10 @@ export default function SimulationGrossRevenue({ initialParams, onBack }: Props)
                                 <span className="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-extrabold text-emerald-800">
                                   Sim
                                 </span>
+                              ) : o.isEstimatedSettlement ? (
+                                <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold text-amber-800">
+                                  Estimado
+                                </span>
                               ) : (
                                 <span className="inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-extrabold text-slate-600">
                                   Não
@@ -380,7 +391,7 @@ export default function SimulationGrossRevenue({ initialParams, onBack }: Props)
                                   Itens do pedido · total pedido {fmtMoney(o.orderTotal)}
                                   {hasFees(o) ? null : (
                                     <span className="ml-2 font-normal normal-case text-amber-700">
-                                      (taxas não importadas — faça upload do income TikTok)
+                                      (taxas não importadas — faça upload do income ou relatório onhold TikTok)
                                     </span>
                                   )}
                                 </div>
