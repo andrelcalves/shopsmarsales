@@ -24,6 +24,8 @@ model Order {
   returnRecord OrderReturn?
   commissionFee Float?  // Net Commission Fee (taxa de comissão líquida)
   serviceFee    Float?  // Taxa de serviço bruta
+  easyReturnFee Float?  // Taxa Devolução Fácil Shopee (income)
+  autoRechargeFee Float?  // Taxa Recarga Automática (income)
   settlementAmount  Float?  // Valor liquidado (relatório income TikTok)
   estimatedSettlementAmount Float?  // Valor estimado a liquidar (relatório onhold TikTok)
   partnerCommission Float?  // Comissões afiliados/criadores/agências (income TikTok)
@@ -225,12 +227,14 @@ model ShopeeIntegration {
 
 model Bill {
   id            Int      @id @default(autoincrement())
+  supplier      String   @default("")
   description   String   // ex: "Fornecedor X - Lote Março"
   invoiceNumber String?  // nota fiscal (opcional)
   totalAmount   Float    // valor total da conta
   dueDate       DateTime? // data limite (opcional)
   status        String   @default("pending") // pending | partial | paid
   isFixedCost   Boolean  @default(false) // true = custo fixo (ex.: aluguel, folha)
+  externalId    String?  @unique // Identificador Nubank / importação extrato
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   payments      BillPayment[]
@@ -246,4 +250,30 @@ model BillPayment {
   notes     String    @default("")
   createdAt DateTime  @default(now())
   @@index([billId])
+}
+
+model Receivable {
+  id            Int      @id @default(autoincrement())
+  supplier      String   @default("") // cliente / pagador
+  description   String
+  invoiceNumber String?
+  totalAmount   Float
+  dueDate       DateTime?
+  status        String   @default("pending") // pending | partial | paid
+  externalId    String?  @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  receipts      ReceivableReceipt[]
+}
+
+model ReceivableReceipt {
+  id           Int        @id @default(autoincrement())
+  receivableId Int
+  receivable   Receivable @relation(fields: [receivableId], references: [id], onDelete: Cascade)
+  amount       Float
+  dueDate      DateTime   @default(now())
+  receivedAt   DateTime?  // null = pendente
+  notes        String     @default("")
+  createdAt    DateTime   @default(now())
+  @@index([receivableId])
 }

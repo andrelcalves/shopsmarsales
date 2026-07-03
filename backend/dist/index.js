@@ -10,10 +10,12 @@ import { createRequire } from 'module';
 import * as shopeeApi from './shopeeApi.js';
 import { parseTikTokIncomeReport } from './tiktokIncome.js';
 import { parseTikTokOnholdReport } from './tiktokOnhold.js';
+import { parseShopeeIncomeReport } from './shopeeIncome.js';
 import { buildProductCostLookup, effectiveCostDisplay, getLatestCostEntry, } from './productCost.js';
 import { resolveCombinedCost, } from './masterProductCost.js';
 import { registerMasterProductRoutes, loadCombinedCostLookup, buildMasterStockCurrent, } from './masterProductRoutes.js';
-import { computeSimulationMetrics, computeContributionDashboard } from './simulationMetrics.js';
+import { computeSimulationMetrics, computeContributionDashboard, buildMonthChannelRateMap, computeOrderProfitBreakdown, listMonthsInclusive } from './simulationMetrics.js';
+import { parseNubankStatementCsv } from './nubankStatement.js';
 function parseDateOnly(dateStr) {
     const s = String(dateStr ?? '').trim();
     if (!s)
@@ -561,8 +563,20 @@ function mapOrderToGrossRevenueRow(o) {
     const sellerDiscount = roundMoney(items.reduce((s, it) => s + it.sellerDiscount, 0));
     const commissionFee = roundMoney(Math.abs(Number(o.commissionFee || 0)));
     const serviceFee = roundMoney(Math.abs(Number(o.serviceFee || 0)));
+    const easyReturnFee = roundMoney(Math.abs(Number(o.easyReturnFee || 0)));
+    const autoRechargeFee = roundMoney(Math.abs(Number(o.autoRechargeFee || 0)));
     const partnerCommission = roundMoney(Math.abs(Number(o.partnerCommission || 0)));
-    const totalFees = roundMoney(commissionFee + serviceFee + partnerCommission);
+    const totalFees = roundMoney(commissionFee + serviceFee + easyReturnFee + autoRechargeFee + partnerCommission);
+    const feePercentBase = grossProductSales > 0 ? grossProductSales : 0;
+    const pctOfGross = (amount) => feePercentBase > 0 ? roundMoney((amount / feePercentBase) * 100) : 0;
+    const feeLines = [
+        { key: 'commission', label: 'Comissão', amount: commissionFee, percentOfGross: pctOfGross(commissionFee) },
+        { key: 'service', label: 'Tarifa plataforma', amount: serviceFee, percentOfGross: pctOfGross(serviceFee) },
+        { key: 'easyReturn', label: 'Devolução Fácil', amount: easyReturnFee, percentOfGross: pctOfGross(easyReturnFee) },
+        { key: 'autoRecharge', label: 'Recarga automática', amount: autoRechargeFee, percentOfGross: pctOfGross(autoRechargeFee) },
+        { key: 'partner', label: 'Comissão parceiro', amount: partnerCommission, percentOfGross: pctOfGross(partnerCommission) },
+    ].filter((line) => line.amount > 0);
+    const totalFeesPercent = pctOfGross(totalFees);
     const orderTotal = roundMoney(Number(o.totalPrice || 0));
     const settlementFromIncome = o.settlementAmount != null && Number(o.settlementAmount) > 0
         ? roundMoney(Number(o.settlementAmount))
@@ -587,7 +601,12 @@ function mapOrderToGrossRevenueRow(o) {
         sellerDiscount,
         commissionFee,
         serviceFee,
+        easyReturnFee,
+        autoRechargeFee,
         partnerCommission,
+        totalFees,
+        totalFeesPercent,
+        feeLines,
         amountToReceive,
         amountReceived,
         isSettled,
@@ -1143,7 +1162,7 @@ async function main() {
                     }
                 }
                 const operations = standardizedSales.map((sale) => {
-                    const data = {
+                    const baseData = {
                         orderId: sale.orderId,
                         source: sale.source,
                         orderDate: sale.orderDate,
@@ -1152,11 +1171,16 @@ async function main() {
                         totalPrice: sale.totalPrice,
                         status: sale.status,
                     };
+                    const createData = { ...baseData };
+                    const updateData = { ...baseData };
                     if (isTrayOrderSource(sale.source)) {
-                        if (sale.freight != null)
-                            data.freight = sale.freight;
+                        if (sale.freight != null) {
+                            createData.freight = sale.freight;
+                            updateData.freight = sale.freight;
+                        }
+                        // Só preenche paymentType na criação; pedidos existentes mantêm valor editado manualmente.
                         if (sale.paymentType != null)
-                            data.paymentType = sale.paymentType;
+                            createData.paymentType = sale.paymentType;
                     }
                     return prisma.order.upsert({
                         where: {
@@ -1165,8 +1189,8 @@ async function main() {
                                 source: sale.source,
                             },
                         },
-                        update: data,
-                        create: data,
+                        update: updateData,
+                        create: createData,
                     });
                 });
                 console.log(`Processando ${operations.length} registros...`);
@@ -1405,14 +1429,171 @@ async function main() {
             return res.status(500).json({ message: 'Erro ao registrar custo.' });
         }
     });
+    // Lista pedidos com filtros (canal, período, busca)
+    // GET /api/orders?channel=all&start=2026-06&end=2026-06&q=55691&limit=100&offset=0
+    app.get('/api/orders', async (req, res) => {
+        try {
+            const channel = String(req.query.channel ?? 'all').trim().toLowerCase();
+            const q = String(req.query.q ?? '').trim();
+            const startStr = String(req.query.start ?? '').trim();
+            const endStr = String(req.query.end ?? startStr).trim();
+            const limit = Math.min(500, Math.max(1, parseInt(String(req.query.limit ?? '100'), 10) || 100));
+            const offset = Math.max(0, parseInt(String(req.query.offset ?? '0'), 10) || 0);
+            const where = {};
+            if (q) {
+                where.OR = [
+                    { orderId: { contains: q, mode: 'insensitive' } },
+                    { productName: { contains: q, mode: 'insensitive' } },
+                ];
+            }
+            if (startStr) {
+                const monthStart = monthStartFromYYYYMM(startStr);
+                const monthEnd = monthStartFromYYYYMM(endStr);
+                if (!monthStart || !monthEnd) {
+                    return res.status(400).json({ message: 'Parâmetros start/end inválidos (use YYYY-MM).' });
+                }
+                const rangeStart = monthStart.getTime() <= monthEnd.getTime() ? monthStart : monthEnd;
+                const rangeEnd = monthStart.getTime() <= monthEnd.getTime() ? monthEnd : monthStart;
+                where.orderDate = {
+                    gte: rangeStart,
+                    lt: new Date(rangeEnd.getFullYear(), rangeEnd.getMonth() + 1, 1),
+                };
+            }
+            if (channel !== 'all') {
+                if (channel === 'tray') {
+                    where.source = { in: [...TRAY_ORDER_SOURCES_LIST] };
+                }
+                else {
+                    where.source = channel;
+                }
+            }
+            const [orders, total] = await Promise.all([
+                prisma.order.findMany({
+                    where,
+                    orderBy: [{ orderDate: 'desc' }, { orderId: 'desc' }],
+                    skip: offset,
+                    take: limit,
+                    select: {
+                        id: true,
+                        orderId: true,
+                        orderDate: true,
+                        productName: true,
+                        quantity: true,
+                        totalPrice: true,
+                        source: true,
+                        status: true,
+                        paymentType: true,
+                        freight: true,
+                    },
+                }),
+                prisma.order.count({ where }),
+            ]);
+            return res.status(200).json({
+                orders: orders.map((o) => ({
+                    ...o,
+                    orderDate: o.orderDate.toISOString(),
+                    paymentType: o.paymentType ?? '',
+                    freight: o.freight ?? null,
+                })),
+                total,
+                limit,
+                offset,
+            });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao listar pedidos.' });
+        }
+    });
+    // Atualiza campos editáveis do pedido (ex.: forma de pagamento)
+    // PATCH /api/orders/:orderId/:source  body: { paymentType: "Pix - Vindi" }
+    app.patch('/api/orders/:orderId/:source', express.json(), async (req, res) => {
+        try {
+            const orderId = decodeURIComponent(String(req.params.orderId ?? '')).trim();
+            const source = decodeURIComponent(String(req.params.source ?? '')).trim().toLowerCase();
+            const { paymentType } = req.body ?? {};
+            if (!orderId || !source)
+                return res.status(400).json({ message: 'orderId e source obrigatórios.' });
+            if (paymentType === undefined)
+                return res.status(400).json({ message: 'paymentType obrigatório.' });
+            const updated = await prisma.order.update({
+                where: { orderId_source: { orderId, source } },
+                data: { paymentType: String(paymentType ?? '').trim() },
+                select: {
+                    orderId: true,
+                    source: true,
+                    paymentType: true,
+                    orderDate: true,
+                    totalPrice: true,
+                    status: true,
+                },
+            });
+            return res.status(200).json({
+                ...updated,
+                orderDate: updated.orderDate.toISOString(),
+                paymentType: updated.paymentType ?? '',
+            });
+        }
+        catch (e) {
+            if (e && typeof e === 'object' && 'code' in e && e.code === 'P2025') {
+                return res.status(404).json({ message: 'Pedido não encontrado.' });
+            }
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao atualizar pedido.' });
+        }
+    });
     // Remove registros por origem (ex.: ?source=tray)
+    // Opcional: ?from=2026-06&to=2026-06 (filtro por orderDate, mês inclusive)
+    // Opcional: ?dryRun=1 (apenas lista, não apaga)
     app.delete('/api/orders', async (req, res) => {
         try {
             const source = String(req.query.source ?? '').trim().toLowerCase();
             if (!source)
                 return res.status(400).json({ message: 'Informe ?source=...' });
-            const result = await prisma.order.deleteMany({ where: { source } });
-            return res.status(200).json({ message: 'Removido com sucesso.', deleted: result.count, source });
+            const fromStr = String(req.query.from ?? '').trim();
+            const toStr = String(req.query.to ?? fromStr).trim();
+            const dryRunRaw = String(req.query.dryRun ?? '').trim().toLowerCase();
+            const dryRun = dryRunRaw === '1' || dryRunRaw === 'true' || dryRunRaw === 'yes';
+            const where = { source };
+            if (fromStr) {
+                const from = monthStartFromYYYYMM(fromStr);
+                const to = monthStartFromYYYYMM(toStr);
+                if (!from || !to) {
+                    return res.status(400).json({ message: 'Parâmetros from/to inválidos (use YYYY-MM).' });
+                }
+                const rangeStart = from.getTime() <= to.getTime() ? from : to;
+                const rangeEnd = from.getTime() <= to.getTime() ? to : from;
+                where.orderDate = {
+                    gte: rangeStart,
+                    lt: new Date(rangeEnd.getFullYear(), rangeEnd.getMonth() + 1, 1),
+                };
+            }
+            if (dryRun) {
+                const preview = await prisma.order.findMany({
+                    where,
+                    select: { orderId: true, orderDate: true, totalPrice: true },
+                    orderBy: [{ orderDate: 'asc' }, { orderId: 'asc' }],
+                });
+                const revenue = roundMoney(preview.reduce((s, o) => s + (o.totalPrice || 0), 0));
+                return res.status(200).json({
+                    message: 'Pré-visualização (nenhum pedido removido).',
+                    dryRun: true,
+                    source,
+                    from: fromStr || null,
+                    to: toStr || null,
+                    count: preview.length,
+                    revenue,
+                    orderIds: preview.map((o) => o.orderId),
+                });
+            }
+            const result = await prisma.order.deleteMany({ where });
+            return res.status(200).json({
+                message: 'Removido com sucesso.',
+                deleted: result.count,
+                source,
+                from: fromStr || null,
+                to: toStr || null,
+            });
         }
         catch (e) {
             console.error(e);
@@ -1810,6 +1991,99 @@ async function main() {
             }
         });
     });
+    // Importação income / liquidação Shopee (xlsx, aba Renda)
+    // POST /api/shopee/income/import (multipart: file)
+    app.post('/api/shopee/income/import', (req, res) => {
+        const form = formidable({ multiples: false, keepExtensions: true });
+        form.parse(req, async (err, _fields, files) => {
+            if (err)
+                return res.status(500).json({ message: 'Erro no form.' });
+            try {
+                const { file } = getFileFromFormidable(files);
+                if (!file)
+                    return res.status(400).json({ message: 'Arquivo não enviado.' });
+                const filepath = getFilePath(file);
+                if (!filepath)
+                    return res.status(400).json({ message: 'Caminho do arquivo não encontrado.' });
+                const dryRunRaw = String(first(_fields.dryRun) ?? '').trim().toLowerCase();
+                const dryRun = dryRunRaw === '1' || dryRunRaw === 'true' || dryRunRaw === 'yes';
+                const result = parseShopeeIncomeReport(filepath);
+                if (result.message) {
+                    return res.status(400).json({ message: result.message });
+                }
+                const { orders: settledOrders, rawRows, orderRows } = result;
+                if (settledOrders.length === 0) {
+                    return res.status(200).json({
+                        message: 'Nenhum pedido liquidado encontrado na aba Renda.',
+                        dryRun,
+                        rawRows,
+                        orderRows,
+                        matched: 0,
+                        notFound: 0,
+                        updated: 0,
+                    });
+                }
+                const orderIds = settledOrders.map((o) => o.orderId);
+                const existing = await prisma.order.findMany({
+                    where: { source: 'shopee', orderId: { in: orderIds } },
+                    select: { orderId: true },
+                });
+                const existingSet = new Set(existing.map((o) => o.orderId));
+                let updated = 0;
+                const notFoundIds = [];
+                if (!dryRun) {
+                    for (const row of settledOrders) {
+                        if (!existingSet.has(row.orderId)) {
+                            notFoundIds.push(row.orderId);
+                            continue;
+                        }
+                        await prisma.order.update({
+                            where: { orderId_source: { orderId: row.orderId, source: 'shopee' } },
+                            data: {
+                                settlementAmount: row.settlementAmount,
+                                commissionFee: row.commissionFee,
+                                serviceFee: row.serviceFee,
+                                easyReturnFee: row.easyReturnFee,
+                                autoRechargeFee: row.autoRechargeFee,
+                            },
+                        });
+                        updated++;
+                    }
+                }
+                const matched = settledOrders.filter((o) => existingSet.has(o.orderId)).length;
+                const notFound = settledOrders.length - matched;
+                return res.status(200).json({
+                    message: dryRun
+                        ? 'Pré-visualização concluída (Shopee income).'
+                        : `Liquidação Shopee aplicada em ${updated} pedido(s).`,
+                    dryRun,
+                    rawRows,
+                    orderRows,
+                    ordersInFile: settledOrders.length,
+                    matched,
+                    notFound,
+                    updated: dryRun ? 0 : updated,
+                    notFoundSample: notFoundIds.slice(0, 20),
+                    preview: dryRun
+                        ? settledOrders.slice(0, 10).map((o) => ({
+                            orderId: o.orderId,
+                            settlementAmount: o.settlementAmount,
+                            commissionFee: o.commissionFee,
+                            serviceFee: o.serviceFee,
+                            easyReturnFee: o.easyReturnFee,
+                            autoRechargeFee: o.autoRechargeFee,
+                            paymentCompletedAt: o.paymentCompletedAt,
+                            exists: existingSet.has(o.orderId),
+                        }))
+                        : undefined,
+                });
+            }
+            catch (e) {
+                console.error(e);
+                return res.status(500).json({ message: 'Erro ao importar income Shopee.' });
+            }
+        });
+    });
     // Taxas por tipo de pagamento (Tray)
     // GET /api/payment-type-fees?month=2026-01&channel=tray
     app.get('/api/payment-type-fees', async (req, res) => {
@@ -2168,6 +2442,7 @@ async function main() {
             const paymentStatus = typeof req.query.paymentStatus === 'string' ? req.query.paymentStatus.trim().toLowerCase() : undefined;
             const isFixedCostRaw = typeof req.query.isFixedCost === 'string' ? req.query.isFixedCost.trim().toLowerCase() : undefined;
             const description = typeof req.query.description === 'string' ? req.query.description.trim() : undefined;
+            const supplier = typeof req.query.supplier === 'string' ? req.query.supplier.trim() : undefined;
             const prismaAny = prisma;
             const where = {};
             if (status)
@@ -2178,6 +2453,8 @@ async function main() {
                 where.isFixedCost = false;
             if (description)
                 where.description = { contains: description, mode: 'insensitive' };
+            if (supplier)
+                where.supplier = { contains: supplier, mode: 'insensitive' };
             let monthStart = null;
             let monthEnd = null;
             if (monthStr) {
@@ -2237,11 +2514,13 @@ async function main() {
     });
     app.post('/api/bills', async (req, res) => {
         try {
+            const supplier = String(req.body?.supplier ?? '').trim();
             const description = String(req.body?.description ?? '').trim();
             const invoiceNumber = req.body?.invoiceNumber != null ? String(req.body.invoiceNumber).trim() || null : null;
             const totalAmount = parseBrNumber(req.body?.totalAmount);
             const dueDateStr = req.body?.dueDate ? String(req.body.dueDate).trim() : null;
             const isFixedCost = req.body?.isFixedCost === true || req.body?.isFixedCost === 'true';
+            const externalId = req.body?.externalId != null ? String(req.body.externalId).trim() || null : null;
             if (!description)
                 return res.status(400).json({ message: 'Descrição obrigatória.' });
             if (totalAmount <= 0)
@@ -2249,7 +2528,7 @@ async function main() {
             const dueDate = parseDateOnlyAsNoonUTC(dueDateStr);
             const prismaAny = prisma;
             const bill = await prismaAny.bill.create({
-                data: { description, invoiceNumber, totalAmount, dueDate, status: 'pending', isFixedCost },
+                data: { supplier, description, invoiceNumber, totalAmount, dueDate, status: 'pending', isFixedCost, externalId },
             });
             return res.status(200).json(bill);
         }
@@ -2264,6 +2543,7 @@ async function main() {
             if (isNaN(id))
                 return res.status(400).json({ message: 'ID inválido.' });
             const description = req.body?.description != null ? String(req.body.description).trim() : undefined;
+            const supplier = req.body?.supplier != null ? String(req.body.supplier).trim() : undefined;
             const invoiceNumber = req.body?.invoiceNumber !== undefined ? (req.body.invoiceNumber ? String(req.body.invoiceNumber).trim() || null : null) : undefined;
             const totalAmount = req.body?.totalAmount != null ? parseBrNumber(req.body.totalAmount) : undefined;
             const dueDateStr = req.body?.dueDate;
@@ -2274,6 +2554,8 @@ async function main() {
             }
             const prismaAny = prisma;
             const data = {};
+            if (supplier !== undefined)
+                data.supplier = supplier;
             if (description !== undefined)
                 data.description = description;
             if (invoiceNumber !== undefined)
@@ -2452,6 +2734,413 @@ async function main() {
         catch (e) {
             console.error(e);
             return res.status(500).json({ message: 'Erro ao remover parcela.' });
+        }
+    });
+    // --- Contas a receber (Receivables) ---
+    const updateReceivableStatus = async (receivableId) => {
+        const prismaAny = prisma;
+        const receivable = await prismaAny.receivable.findUnique({
+            where: { id: receivableId },
+            include: { receipts: true },
+        });
+        if (!receivable)
+            return;
+        const totalReceived = (receivable.receipts || []).reduce((s, r) => s + (r.receivedAt != null ? (r.amount || 0) : 0), 0);
+        let status = 'pending';
+        if (totalReceived >= receivable.totalAmount)
+            status = 'paid';
+        else if (totalReceived > 0)
+            status = 'partial';
+        await prismaAny.receivable.update({
+            where: { id: receivableId },
+            data: { status },
+        });
+    };
+    app.get('/api/receivables', async (req, res) => {
+        try {
+            const status = typeof req.query.status === 'string' ? req.query.status.trim() : undefined;
+            const monthStr = typeof req.query.month === 'string' ? req.query.month.trim() : undefined;
+            const receiptStatus = typeof req.query.receiptStatus === 'string' ? req.query.receiptStatus.trim().toLowerCase() : undefined;
+            const description = typeof req.query.description === 'string' ? req.query.description.trim() : undefined;
+            const supplier = typeof req.query.supplier === 'string' ? req.query.supplier.trim() : undefined;
+            const prismaAny = prisma;
+            const where = {};
+            if (status)
+                where.status = status;
+            if (description)
+                where.description = { contains: description, mode: 'insensitive' };
+            if (supplier)
+                where.supplier = { contains: supplier, mode: 'insensitive' };
+            let monthStart = null;
+            let monthEnd = null;
+            if (monthStr) {
+                const m = monthStr.match(/^(\d{4})-(\d{2})$/);
+                if (m) {
+                    monthStart = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, 1);
+                    monthEnd = new Date(parseInt(m[1], 10), parseInt(m[2], 10), 1);
+                }
+            }
+            const receiptWhere = {};
+            if (monthStart && monthEnd) {
+                receiptWhere.dueDate = { gte: monthStart, lt: monthEnd };
+            }
+            if (receiptStatus === 'received')
+                receiptWhere.receivedAt = { not: null };
+            if (receiptStatus === 'pending')
+                receiptWhere.receivedAt = null;
+            const hasReceiptFilter = Object.keys(receiptWhere).length > 0;
+            let receivables = await prismaAny.receivable.findMany({
+                where,
+                include: {
+                    receipts: {
+                        where: hasReceiptFilter ? receiptWhere : undefined,
+                        orderBy: { dueDate: 'asc' },
+                    },
+                },
+                orderBy: { createdAt: 'desc' },
+            });
+            if (hasReceiptFilter) {
+                receivables = receivables.filter((r) => (r.receipts?.length ?? 0) > 0);
+            }
+            return res.status(200).json(receivables);
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao buscar contas a receber.' });
+        }
+    });
+    app.get('/api/receivables/:id', async (req, res) => {
+        try {
+            const id = parseInt(String(req.params.id), 10);
+            if (isNaN(id))
+                return res.status(400).json({ message: 'ID inválido.' });
+            const prismaAny = prisma;
+            const receivable = await prismaAny.receivable.findUnique({
+                where: { id },
+                include: { receipts: { orderBy: { dueDate: 'asc' } } },
+            });
+            if (!receivable)
+                return res.status(404).json({ message: 'Conta a receber não encontrada.' });
+            return res.status(200).json(receivable);
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao buscar conta a receber.' });
+        }
+    });
+    app.post('/api/receivables', async (req, res) => {
+        try {
+            const supplier = String(req.body?.supplier ?? '').trim();
+            const description = String(req.body?.description ?? '').trim();
+            const invoiceNumber = req.body?.invoiceNumber != null ? String(req.body.invoiceNumber).trim() || null : null;
+            const totalAmount = parseBrNumber(req.body?.totalAmount);
+            const dueDateStr = req.body?.dueDate ? String(req.body.dueDate).trim() : null;
+            const externalId = req.body?.externalId != null ? String(req.body.externalId).trim() || null : null;
+            if (!description)
+                return res.status(400).json({ message: 'Descrição obrigatória.' });
+            if (totalAmount <= 0)
+                return res.status(400).json({ message: 'Valor total deve ser maior que zero.' });
+            const dueDate = parseDateOnlyAsNoonUTC(dueDateStr);
+            const prismaAny = prisma;
+            const receivable = await prismaAny.receivable.create({
+                data: { supplier, description, invoiceNumber, totalAmount, dueDate, status: 'pending', externalId },
+            });
+            return res.status(200).json(receivable);
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao criar conta a receber.' });
+        }
+    });
+    app.patch('/api/receivables/:id', async (req, res) => {
+        try {
+            const id = parseInt(String(req.params.id), 10);
+            if (isNaN(id))
+                return res.status(400).json({ message: 'ID inválido.' });
+            const supplier = req.body?.supplier != null ? String(req.body.supplier).trim() : undefined;
+            const description = req.body?.description != null ? String(req.body.description).trim() : undefined;
+            const invoiceNumber = req.body?.invoiceNumber !== undefined ? (req.body.invoiceNumber ? String(req.body.invoiceNumber).trim() || null : null) : undefined;
+            const totalAmount = req.body?.totalAmount != null ? parseBrNumber(req.body.totalAmount) : undefined;
+            const dueDateStr = req.body?.dueDate;
+            let dueDate = undefined;
+            if (dueDateStr !== undefined) {
+                dueDate = dueDateStr === null || dueDateStr === '' ? null : parseDateOnlyAsNoonUTC(dueDateStr) ?? undefined;
+            }
+            const prismaAny = prisma;
+            const data = {};
+            if (supplier !== undefined)
+                data.supplier = supplier;
+            if (description !== undefined)
+                data.description = description;
+            if (invoiceNumber !== undefined)
+                data.invoiceNumber = invoiceNumber;
+            if (totalAmount !== undefined)
+                data.totalAmount = totalAmount;
+            if (dueDate !== undefined)
+                data.dueDate = dueDate;
+            await prismaAny.receivable.update({ where: { id }, data });
+            await updateReceivableStatus(id);
+            const updated = await prismaAny.receivable.findUnique({
+                where: { id },
+                include: { receipts: { orderBy: { dueDate: 'asc' } } },
+            });
+            return res.status(200).json(updated);
+        }
+        catch (e) {
+            if (String(e?.code) === 'P2025')
+                return res.status(404).json({ message: 'Conta a receber não encontrada.' });
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao atualizar conta a receber.' });
+        }
+    });
+    app.delete('/api/receivables/:id', async (req, res) => {
+        try {
+            const id = parseInt(String(req.params.id), 10);
+            if (isNaN(id))
+                return res.status(400).json({ message: 'ID inválido.' });
+            const prismaAny = prisma;
+            await prismaAny.receivable.delete({ where: { id } });
+            return res.status(200).json({ message: 'Removido com sucesso.' });
+        }
+        catch (e) {
+            if (String(e?.code) === 'P2025')
+                return res.status(404).json({ message: 'Conta a receber não encontrada.' });
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao remover conta a receber.' });
+        }
+    });
+    app.post('/api/receivables/:id/receipts', async (req, res) => {
+        try {
+            const receivableId = parseInt(String(req.params.id), 10);
+            if (isNaN(receivableId))
+                return res.status(400).json({ message: 'ID da conta inválido.' });
+            const amount = parseBrNumber(req.body?.amount);
+            const dueDateStr = String(req.body?.dueDate ?? '').trim();
+            const receivedAtStr = req.body?.receivedAt ? String(req.body.receivedAt).trim() : null;
+            const notes = String(req.body?.notes ?? '').trim();
+            if (amount <= 0)
+                return res.status(400).json({ message: 'Valor deve ser maior que zero.' });
+            const dueDate = parseDateOnlyAsNoonUTC(dueDateStr);
+            if (!dueDate)
+                return res.status(400).json({ message: 'Data de vencimento inválida (use YYYY-MM-DD).' });
+            const receivedAt = parseDateOnlyAsNoonUTC(receivedAtStr);
+            const prismaAny = prisma;
+            await prismaAny.receivableReceipt.create({
+                data: { receivableId, amount, dueDate, receivedAt, notes },
+            });
+            await updateReceivableStatus(receivableId);
+            const receivable = await prismaAny.receivable.findUnique({
+                where: { id: receivableId },
+                include: { receipts: { orderBy: { dueDate: 'asc' } } },
+            });
+            return res.status(200).json(receivable);
+        }
+        catch (e) {
+            if (String(e?.code) === 'P2003')
+                return res.status(404).json({ message: 'Conta a receber não encontrada.' });
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao registrar recebimento.' });
+        }
+    });
+    app.patch('/api/receivables/:id/receipts/:receiptId', async (req, res) => {
+        try {
+            const receivableId = parseInt(String(req.params.id), 10);
+            const receiptId = parseInt(String(req.params.receiptId), 10);
+            if (isNaN(receivableId) || isNaN(receiptId))
+                return res.status(400).json({ message: 'IDs inválidos.' });
+            const amount = req.body?.amount != null ? parseBrNumber(req.body.amount) : undefined;
+            const dueDateStr = req.body?.dueDate;
+            const receivedAtStr = req.body?.receivedAt;
+            const notes = req.body?.notes !== undefined ? String(req.body.notes).trim() : undefined;
+            let dueDate;
+            if (dueDateStr != null) {
+                const d = parseDateOnlyAsNoonUTC(dueDateStr);
+                if (d)
+                    dueDate = d;
+            }
+            let receivedAt = undefined;
+            if (receivedAtStr !== undefined) {
+                receivedAt = receivedAtStr === null || receivedAtStr === '' ? null : parseDateOnlyAsNoonUTC(receivedAtStr) ?? undefined;
+            }
+            const prismaAny = prisma;
+            const data = {};
+            if (amount !== undefined)
+                data.amount = amount;
+            if (dueDate !== undefined)
+                data.dueDate = dueDate;
+            if (receivedAt !== undefined)
+                data.receivedAt = receivedAt;
+            if (notes !== undefined)
+                data.notes = notes;
+            await prismaAny.receivableReceipt.updateMany({
+                where: { id: receiptId, receivableId },
+                data,
+            });
+            await updateReceivableStatus(receivableId);
+            const receivable = await prismaAny.receivable.findUnique({
+                where: { id: receivableId },
+                include: { receipts: { orderBy: { dueDate: 'asc' } } },
+            });
+            return res.status(200).json(receivable);
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao atualizar recebimento.' });
+        }
+    });
+    app.delete('/api/receivables/:id/receipts/:receiptId', async (req, res) => {
+        try {
+            const receivableId = parseInt(String(req.params.id), 10);
+            const receiptId = parseInt(String(req.params.receiptId), 10);
+            if (isNaN(receivableId) || isNaN(receiptId))
+                return res.status(400).json({ message: 'IDs inválidos.' });
+            const prismaAny = prisma;
+            await prismaAny.receivableReceipt.deleteMany({ where: { id: receiptId, receivableId } });
+            await updateReceivableStatus(receivableId);
+            const receivable = await prismaAny.receivable.findUnique({
+                where: { id: receivableId },
+                include: { receipts: { orderBy: { dueDate: 'asc' } } },
+            });
+            return res.status(200).json(receivable);
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao remover recebimento.' });
+        }
+    });
+    // --- Importação extrato bancário (Nubank CSV) ---
+    app.post('/api/bank-statement/parse', async (req, res) => {
+        try {
+            const csv = String(req.body?.csv ?? '');
+            if (!csv.trim())
+                return res.status(400).json({ message: 'Envie csv com o conteúdo do extrato.' });
+            const parsed = parseNubankStatementCsv(csv);
+            const prismaAny = prisma;
+            const allIds = [...parsed.payables, ...parsed.receivables].map((d) => d.externalId);
+            const existingBills = allIds.length > 0
+                ? await prismaAny.bill.findMany({
+                    where: { externalId: { in: allIds } },
+                    select: { externalId: true },
+                })
+                : [];
+            const existingReceivables = allIds.length > 0
+                ? await prismaAny.receivable.findMany({
+                    where: { externalId: { in: allIds } },
+                    select: { externalId: true },
+                })
+                : [];
+            const existingSet = new Set([
+                ...existingBills.map((b) => b.externalId).filter(Boolean),
+                ...existingReceivables.map((r) => r.externalId).filter(Boolean),
+            ]);
+            const skipped = allIds.filter((id) => existingSet.has(id));
+            return res.status(200).json({
+                payables: parsed.payables,
+                receivables: parsed.receivables,
+                errors: parsed.errors,
+                duplicateExternalIds: skipped,
+            });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao interpretar extrato.' });
+        }
+    });
+    app.post('/api/bank-statement/confirm', async (req, res) => {
+        try {
+            const payables = (req.body?.payables ?? []);
+            const receivables = (req.body?.receivables ?? []);
+            const prismaAny = prisma;
+            let createdPayables = 0;
+            let createdReceivables = 0;
+            let skippedDuplicates = 0;
+            const processDraft = async (draft, type) => {
+                if (!draft.included)
+                    return;
+                const externalId = String(draft.externalId || '').trim();
+                if (!externalId)
+                    return;
+                const existingBill = await prismaAny.bill.findUnique({ where: { externalId } });
+                const existingReceivable = await prismaAny.receivable.findUnique({ where: { externalId } });
+                if (existingBill || existingReceivable) {
+                    skippedDuplicates++;
+                    return;
+                }
+                const amount = parseBrNumber(draft.amount);
+                if (amount <= 0)
+                    return;
+                const dueDate = parseDateOnlyAsNoonUTC(draft.date);
+                if (!dueDate)
+                    return;
+                const settled = draft.settled !== false;
+                const supplier = String(draft.supplier ?? '').trim();
+                const description = String(draft.description ?? '').trim() || supplier || 'Extrato Nubank';
+                if (type === 'payable') {
+                    const bill = await prismaAny.bill.create({
+                        data: {
+                            supplier,
+                            description,
+                            totalAmount: amount,
+                            dueDate,
+                            status: settled ? 'paid' : 'pending',
+                            isFixedCost: draft.isFixedCost === true,
+                            externalId,
+                        },
+                    });
+                    await prismaAny.billPayment.create({
+                        data: {
+                            billId: bill.id,
+                            amount,
+                            dueDate,
+                            paidAt: settled ? dueDate : null,
+                            notes: 'Importado do extrato Nubank',
+                        },
+                    });
+                    if (!settled)
+                        await updateBillStatus(bill.id);
+                    createdPayables++;
+                }
+                else {
+                    const receivable = await prismaAny.receivable.create({
+                        data: {
+                            supplier,
+                            description,
+                            totalAmount: amount,
+                            dueDate,
+                            status: settled ? 'paid' : 'pending',
+                            externalId,
+                        },
+                    });
+                    await prismaAny.receivableReceipt.create({
+                        data: {
+                            receivableId: receivable.id,
+                            amount,
+                            dueDate,
+                            receivedAt: settled ? dueDate : null,
+                            notes: 'Importado do extrato Nubank',
+                        },
+                    });
+                    if (!settled)
+                        await updateReceivableStatus(receivable.id);
+                    createdReceivables++;
+                }
+            };
+            for (const draft of payables) {
+                await processDraft(draft, 'payable');
+            }
+            for (const draft of receivables) {
+                await processDraft(draft, 'receivable');
+            }
+            return res.status(200).json({
+                createdPayables,
+                createdReceivables,
+                skippedDuplicates,
+                message: `Importação concluída: ${createdPayables} a pagar, ${createdReceivables} a receber.${skippedDuplicates ? ` ${skippedDuplicates} duplicata(s) ignorada(s).` : ''}`,
+            });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao confirmar importação.' });
         }
     });
     app.get('/api/stock-projection', async (_req, res) => {
@@ -2744,24 +3433,51 @@ async function main() {
             const orderWhere = buildSimulationOrderWhereRange(rangeStart, rangeEnd, channel);
             const orders = await prisma.order.findMany({
                 where: orderWhere,
-                include: { items: true },
+                include: { items: { include: { product: true } } },
                 orderBy: [{ orderDate: 'desc' }, { orderId: 'desc' }],
             });
-            const list = orders.map((o) => mapOrderToGrossRevenueRow({
-                orderId: o.orderId,
-                source: o.source,
-                orderDate: o.orderDate,
-                status: o.status,
-                totalPrice: o.totalPrice,
-                commissionFee: o.commissionFee,
-                serviceFee: o.serviceFee,
-                partnerCommission: o.partnerCommission,
-                settlementAmount: o.settlementAmount,
-                estimatedSettlementAmount: o
-                    .estimatedSettlementAmount,
-                paymentId: o.paymentId,
-                items: o.items,
-            }));
+            const monthsInRange = listMonthsInclusive(`${rangeStart.getFullYear()}-${String(rangeStart.getMonth() + 1).padStart(2, '0')}`, `${rangeEnd.getFullYear()}-${String(rangeEnd.getMonth() + 1).padStart(2, '0')}`);
+            const productIds = new Set();
+            for (const o of orders) {
+                for (const item of o.items) {
+                    if (item.productId != null)
+                        productIds.add(item.productId);
+                }
+            }
+            const [combinedCost, rateMap] = await Promise.all([
+                loadCombinedCostLookup(prisma, [...productIds]),
+                buildMonthChannelRateMap(prisma, monthsInRange),
+            ]);
+            const list = orders.map((o) => {
+                const row = mapOrderToGrossRevenueRow({
+                    orderId: o.orderId,
+                    source: o.source,
+                    orderDate: o.orderDate,
+                    status: o.status,
+                    totalPrice: o.totalPrice,
+                    commissionFee: o.commissionFee,
+                    serviceFee: o.serviceFee,
+                    easyReturnFee: o.easyReturnFee,
+                    autoRechargeFee: o.autoRechargeFee,
+                    partnerCommission: o.partnerCommission,
+                    settlementAmount: o.settlementAmount,
+                    estimatedSettlementAmount: o
+                        .estimatedSettlementAmount,
+                    paymentId: o.paymentId,
+                    items: o.items,
+                });
+                const profit = computeOrderProfitBreakdown({
+                    source: o.source,
+                    orderId: o.orderId,
+                    orderDate: o.orderDate,
+                    orderTotal: Number(o.totalPrice || 0),
+                    amountToReceive: row.amountToReceive,
+                    items: o.items,
+                    combinedCost,
+                    rateMap,
+                });
+                return { ...row, profit };
+            });
             const faturamentoBruto = roundMoney(list.reduce((s, o) => s + o.orderTotal, 0));
             const totalProductUnits = list.reduce((s, o) => s + o.unitsInOrder, 0);
             return res.status(200).json({
@@ -2778,7 +3494,15 @@ async function main() {
                     sellerDiscount: roundMoney(list.reduce((s, o) => s + o.sellerDiscount, 0)),
                     commissionFee: roundMoney(list.reduce((s, o) => s + o.commissionFee, 0)),
                     serviceFee: roundMoney(list.reduce((s, o) => s + o.serviceFee, 0)),
+                    easyReturnFee: roundMoney(list.reduce((s, o) => s + o.easyReturnFee, 0)),
+                    autoRechargeFee: roundMoney(list.reduce((s, o) => s + o.autoRechargeFee, 0)),
                     partnerCommission: roundMoney(list.reduce((s, o) => s + o.partnerCommission, 0)),
+                    totalFees: roundMoney(list.reduce((s, o) => s + o.totalFees, 0)),
+                    totalFeesPercent: list.reduce((s, o) => s + o.grossProductSales, 0) > 0
+                        ? roundMoney((list.reduce((s, o) => s + o.totalFees, 0) /
+                            list.reduce((s, o) => s + o.grossProductSales, 0)) *
+                            100)
+                        : 0,
                     amountToReceive: roundMoney(list.reduce((s, o) => s + o.amountToReceive, 0)),
                     amountReceived: roundMoney(list.reduce((s, o) => s + (o.amountReceived ?? 0), 0)),
                 },

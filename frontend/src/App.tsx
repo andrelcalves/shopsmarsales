@@ -13,6 +13,7 @@ import StockOverview from './StockOverview';
 import StockLaunch from './StockLaunch';
 import MasterProducts from './MasterProducts';
 import BillsToPay from './BillsToPay';
+import Receivables from './Receivables';
 import SalesByDayDashboard from './SalesByDayDashboard';
 import BillsDashboard from './BillsDashboard';
 import Pricing from './Pricing';
@@ -20,6 +21,7 @@ import ShopeeIntegration from './ShopeeIntegration';
 import ShopeeDuplicates from './ShopeeDuplicates';
 import ProductCurve from './ProductCurve';
 import Returns from './Returns';
+import Orders from './Orders';
 
 import { API_URL } from './config';
 import { parseApiJson } from './api';
@@ -48,7 +50,7 @@ type OrderUploadSource = 'shopee' | 'tiktok' | 'tray' | 'tray_atacado' | 'tray_v
 
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'contribution_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock_overview' | 'stock_launch' | 'master_products' | 'simulation' | 'simulation_gross_revenue' | 'bills_to_pay' | 'pricing' | 'shopee_integration' | 'shopee_duplicates' | 'product_curve' | 'returns'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'contribution_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock_overview' | 'stock_launch' | 'master_products' | 'simulation' | 'simulation_gross_revenue' | 'bills_to_pay' | 'receivables' | 'pricing' | 'shopee_integration' | 'shopee_duplicates' | 'product_curve' | 'returns' | 'orders'>('upload');
   const [grossRevenueParams, setGrossRevenueParams] = useState<GrossRevenueNavParams | null>(null);
 
   // --- LÓGICA DA TELA DE UPLOAD ---
@@ -61,6 +63,9 @@ function App() {
   const [tiktokIncomeFile, setTiktokIncomeFile] = useState<File | null>(null);
   const [tiktokIncomeMessage, setTiktokIncomeMessage] = useState('');
   const [tiktokIncomeLoading, setTiktokIncomeLoading] = useState(false);
+  const [shopeeIncomeFile, setShopeeIncomeFile] = useState<File | null>(null);
+  const [shopeeIncomeMessage, setShopeeIncomeMessage] = useState('');
+  const [shopeeIncomeLoading, setShopeeIncomeLoading] = useState(false);
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -188,6 +193,54 @@ function App() {
     }
   };
 
+  const handleShopeeIncomeFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      setShopeeIncomeFile(e.target.files[0]);
+    }
+  };
+
+  const handleShopeeIncomeSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!shopeeIncomeFile) {
+      setShopeeIncomeMessage('Por favor, selecione o relatório Shopee (.xlsx).');
+      return;
+    }
+
+    setShopeeIncomeLoading(true);
+    setShopeeIncomeMessage('Enviando e processando relatório Shopee...');
+    const formData = new FormData();
+    formData.append('file', shopeeIncomeFile);
+
+    try {
+      const response = await fetch(`${API_URL}/api/shopee/income/import`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await parseApiJson<{
+        message?: string;
+        updated?: number;
+        notFound?: number;
+        matched?: number;
+      }>(response);
+
+      if (response.ok) {
+        const nf = data.notFound ?? 0;
+        const extra =
+          nf > 0
+            ? ` ${nf} pedido(s) do arquivo não existem no sistema (importe os pedidos Shopee antes).`
+            : '';
+        setShopeeIncomeMessage(`${data.message} Atualizados: ${data.updated ?? 0}.${extra}`);
+        fetchSales();
+      } else {
+        throw new Error(data.message || 'Erro na importação de income Shopee.');
+      }
+    } catch (error: unknown) {
+      setShopeeIncomeMessage(`Erro: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setShopeeIncomeLoading(false);
+    }
+  };
+
   const handleItemsSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!itemsFile) {
@@ -253,6 +306,8 @@ function App() {
                                       ? 'Produtos mestre'
                                   : currentView === 'bills_to_pay'
                                     ? 'Cadastro contas'
+                                    : currentView === 'receivables'
+                                      ? 'Contas a receber'
                                     : currentView === 'pricing'
                                       ? 'Precificação'
                                       : currentView === 'simulation'
@@ -267,7 +322,9 @@ function App() {
                                               ? 'Curva ABC'
                                               : currentView === 'returns'
                                                 ? 'Devoluções'
-                                                : 'Consolidador'}
+                                                : currentView === 'orders'
+                                                  ? 'Pedidos'
+                                                  : 'Consolidador'}
               </h1>
             </div>
 
@@ -294,15 +351,6 @@ function App() {
                   )}
                 >
                   Vendas por Dia
-                </button>
-                <button
-                  onClick={() => setCurrentView('bills_dashboard')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'bills_dashboard' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Contas a pagar
                 </button>
                 <button
                   onClick={() => setCurrentView('ads_dashboard')}
@@ -362,6 +410,48 @@ function App() {
                   Faturamento bruto
                 </button>
               </div>
+              {/* Financeiro */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-white/70 uppercase tracking-wider">Financeiro</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 bg-white/10 border border-white/15 rounded-2xl p-1">
+                <button
+                  onClick={() => setCurrentView('bills_to_pay')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'bills_to_pay' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Cadastro contas
+                </button>
+                <button
+                  onClick={() => setCurrentView('ads_spend')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'ads_spend' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Cadastro ADS
+                </button>
+                <button
+                  onClick={() => setCurrentView('receivables')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'receivables' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Contas a receber
+                </button>
+                <button
+                  onClick={() => setCurrentView('bills_dashboard')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'bills_dashboard' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Contas a pagar
+                </button>
+              </div>
               {/* Cadastros */}
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-white/70 uppercase tracking-wider">Cadastros</span>
@@ -384,15 +474,6 @@ function App() {
                   )}
                 >
                   Produtos
-                </button>
-                <button
-                  onClick={() => setCurrentView('ads_spend')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'ads_spend' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Cadastro ADS
                 </button>
                 <button
                   onClick={() => setCurrentView('payment_type_fees')}
@@ -422,15 +503,6 @@ function App() {
                   Produtos mestre
                 </button>
                 <button
-                  onClick={() => setCurrentView('bills_to_pay')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'bills_to_pay' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Cadastro contas
-                </button>
-                <button
                   onClick={() => setCurrentView('pricing')}
                   className={cn(
                     'px-4 py-2 rounded-xl text-sm font-extrabold transition',
@@ -456,6 +528,15 @@ function App() {
                   )}
                 >
                   Dup. Shopee
+                </button>
+                <button
+                  onClick={() => setCurrentView('orders')}
+                  className={cn(
+                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
+                    currentView === 'orders' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
+                  )}
+                >
+                  Pedidos
                 </button>
                 <button
                   onClick={() => setCurrentView('returns')}
@@ -497,6 +578,8 @@ function App() {
         <MasterProducts />
       ) : currentView === 'bills_to_pay' ? (
         <BillsToPay />
+      ) : currentView === 'receivables' ? (
+        <Receivables />
       ) : currentView === 'pricing' ? (
         <Pricing />
       ) : currentView === 'simulation' ? (
@@ -525,6 +608,8 @@ function App() {
         <ProductCurve />
       ) : currentView === 'returns' ? (
         <Returns />
+      ) : currentView === 'orders' ? (
+        <Orders />
       ) : (
         <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
           {/* Card: Upload */}
@@ -684,6 +769,53 @@ function App() {
             {tiktokIncomeMessage && (
               <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
                 {tiktokIncomeMessage}
+              </div>
+            )}
+          </div>
+
+          {/* Card: Income / Liquidação Shopee */}
+          <div className={cn(UI.card, 'p-6')}>
+            <div>
+              <h2 className="text-lg font-black tracking-tight text-slate-900">Income / Liquidação Shopee</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Relatório de rendimento do <span className="font-bold">Shopee Seller Centre</span> (
+                <span className="font-bold">.xlsx</span>): aba <span className="font-bold">Renda</span>, linhas{' '}
+                <span className="font-bold">Order</span>. Atualiza valor liquidado e taxas nos pedidos Shopee já
+                importados.
+              </p>
+            </div>
+
+            <form onSubmit={handleShopeeIncomeSubmit} className="mt-5 grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+              <div className="md:col-span-9">
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
+                  Arquivo Shopee Income (.xlsx)
+                </label>
+                <input
+                  type="file"
+                  onChange={handleShopeeIncomeFileChange}
+                  accept=".xlsx,.xls"
+                  className="mt-2 block w-full text-sm text-slate-700 file:mr-4 file:rounded-xl file:border-0 file:bg-slate-100 file:px-4 file:py-2 file:text-sm file:font-extrabold file:text-slate-900 hover:file:bg-slate-200"
+                />
+              </div>
+              <div className="md:col-span-3">
+                <button
+                  type="submit"
+                  disabled={!shopeeIncomeFile || shopeeIncomeLoading}
+                  className={cn(
+                    'w-full rounded-xl px-4 py-2 text-sm font-extrabold shadow-sm transition',
+                    shopeeIncomeFile && !shopeeIncomeLoading
+                      ? 'bg-orange-600 text-white hover:bg-orange-700'
+                      : 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                  )}
+                >
+                  {shopeeIncomeLoading ? 'Processando...' : 'Importar relatório'}
+                </button>
+              </div>
+            </form>
+
+            {shopeeIncomeMessage && (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
+                {shopeeIncomeMessage}
               </div>
             )}
           </div>

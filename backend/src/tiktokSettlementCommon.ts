@@ -303,11 +303,19 @@ export function normHeader(s: string): string {
 }
 
 export function readWorkbook(filepath: string): { workbook: any; error?: string } {
-  const ext = String(filepath || '').toLowerCase();
-  if (!ext.endsWith('.xlsx') && !ext.endsWith('.xls')) {
-    return { workbook: null, error: 'Use arquivo Excel (.xlsx ou .xls).' };
+  if (!filepath) {
+    return { workbook: null, error: 'Caminho do arquivo inválido.' };
   }
-  return { workbook: xlsx.readFile(filepath, { raw: true }) };
+  const ext = String(filepath).toLowerCase();
+  const hasValidExt = ext.endsWith('.xlsx') || ext.endsWith('.xls');
+  try {
+    return { workbook: xlsx.readFile(filepath, { raw: true }) };
+  } catch {
+    if (!hasValidExt) {
+      return { workbook: null, error: 'Use arquivo Excel (.xlsx ou .xls).' };
+    }
+    return { workbook: null, error: 'Não foi possível ler o arquivo Excel.' };
+  }
 }
 
 export function findSheetByHint(sheetNames: string[], exact: string, hint: string): string | null {

@@ -22,6 +22,8 @@ type ChannelRow = {
   custoProducao: number;
   margemContribuicao: number;
   margemContribuicaoPercent: number;
+  lucroLiquido: number;
+  margemLucro: number;
 };
 
 type MonthRow = { month: string; byChannel: ChannelRow[] };
@@ -72,6 +74,32 @@ function fmtPct(v: number) {
 
 function channelLabel(ch: string) {
   return CHANNEL_LABELS[ch] || ch;
+}
+
+function MoneyWithPct({
+  value,
+  revenue,
+  percent,
+  accent,
+}: {
+  value: number;
+  revenue: number;
+  percent?: number;
+  accent?: "positive" | "negative" | "neutral";
+}) {
+  const pct = percent ?? pctOfRevenue(value, revenue);
+  const valueClass =
+    accent === "positive"
+      ? "text-emerald-700 font-extrabold"
+      : accent === "negative"
+        ? "text-red-600 font-extrabold"
+        : "text-slate-900";
+  return (
+    <div className="tabular-nums">
+      <div className={valueClass}>{fmtMoney(value)}</div>
+      <div className="text-[11px] text-slate-500 font-semibold">{fmtPct(pct)}</div>
+    </div>
+  );
 }
 
 function defaultMonthRange() {
@@ -355,7 +383,7 @@ export default function ContributionDashboard(): JSX.Element {
                     <th className="px-4 py-3">Taxas</th>
                     <th className="px-4 py-3">Custo prod.</th>
                     <th className="px-4 py-3">Margem</th>
-                    <th className="px-4 py-3">Margem %</th>
+                    <th className="px-4 py-3">Lucro líquido</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -365,20 +393,33 @@ export default function ContributionDashboard(): JSX.Element {
                       <td className="px-4 py-3 font-bold text-slate-700">
                         {channelLabel(row.channel)}
                       </td>
-                      <td className="px-4 py-3 text-slate-900">{fmtMoney(row.faturamentoBruto)}</td>
-                      <td className="px-4 py-3 text-slate-900">{fmtMoney(row.adsInvestimento)}</td>
-                      <td className="px-4 py-3 text-slate-900">{fmtMoney(row.taxas)}</td>
-                      <td className="px-4 py-3 text-slate-900">{fmtMoney(row.custoProducao)}</td>
-                      <td
-                        className={cn(
-                          "px-4 py-3 font-extrabold",
-                          row.margemContribuicao >= 0 ? "text-emerald-700" : "text-red-600",
-                        )}
-                      >
-                        {fmtMoney(row.margemContribuicao)}
+                      <td className="px-4 py-3 text-slate-900 tabular-nums">
+                        {fmtMoney(row.faturamentoBruto)}
                       </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.margemContribuicaoPercent.toFixed(1)}%
+                      <td className="px-4 py-3">
+                        <MoneyWithPct value={row.adsInvestimento} revenue={row.faturamentoBruto} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <MoneyWithPct value={row.taxas} revenue={row.faturamentoBruto} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <MoneyWithPct value={row.custoProducao} revenue={row.faturamentoBruto} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <MoneyWithPct
+                          value={row.margemContribuicao}
+                          revenue={row.faturamentoBruto}
+                          percent={row.margemContribuicaoPercent}
+                          accent={row.margemContribuicao >= 0 ? "positive" : "negative"}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <MoneyWithPct
+                          value={row.lucroLiquido ?? 0}
+                          revenue={row.faturamentoBruto}
+                          percent={row.margemLucro ?? pctOfRevenue(row.lucroLiquido ?? 0, row.faturamentoBruto)}
+                          accent={(row.lucroLiquido ?? 0) >= 0 ? "positive" : "negative"}
+                        />
                       </td>
                     </tr>
                   ))}

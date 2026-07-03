@@ -167,8 +167,17 @@ export async function computeSimulationMetrics(
       : orders
           .filter((o: { source: string }) => o.source === 'shopee')
           .reduce(
-            (s: number, o: { commissionFee: number | null; serviceFee: number | null }) =>
-              s + (o.commissionFee || 0) + (o.serviceFee || 0),
+            (s: number, o: {
+              commissionFee: number | null;
+              serviceFee: number | null;
+              easyReturnFee?: number | null;
+              autoRechargeFee?: number | null;
+            }) =>
+              s +
+              (o.commissionFee || 0) +
+              (o.serviceFee || 0) +
+              (o.easyReturnFee || 0) +
+              (o.autoRechargeFee || 0),
             0,
           );
 
@@ -329,6 +338,8 @@ export type ContributionChannelRow = {
   custoProducao: number;
   margemContribuicao: number;
   margemContribuicaoPercent: number;
+  lucroLiquido: number;
+  margemLucro: number;
 };
 
 export async function computeContributionDashboard(
@@ -362,6 +373,8 @@ export async function computeContributionDashboard(
         custoProducao: m.custoProducao,
         margemContribuicao: m.margemContribuicao,
         margemContribuicaoPercent: m.margemContribuicaoPercent,
+        lucroLiquido: m.lucroLiquido,
+        margemLucro: m.margemLucro,
       });
     }
     byMonth.push({ month, byChannel });
@@ -372,5 +385,122 @@ export async function computeContributionDashboard(
     to: rangeTo,
     channels: [...CONTRIBUTION_DASHBOARD_CHANNELS],
     byMonth,
+  };
+}
+
+export type OrderProfitBreakdown = {
+  valorAReceber: number;
+  custoProducao: number;
+  custoProducaoPercent: number;
+  custoOperacao: number;
+  custoOperacaoPercent: number;
+  custoAds: number;
+  custoAdsPercent: number;
+  imposto: number;
+  impostoPercent: number;
+  lucroLiquido: number;
+  lucroLiquidoPercentGross: number;
+  lucroLiquidoPercentReceived: number;
+};
+
+type MonthChannelRates = {
+  adsPercent: number;
+  fixedPercent: number;
+  taxPercent: number;
+};
+
+function roundMoney(n: number): number {
+  return Math.round(Number(n || 0) * 100) / 100;
+}
+
+function pctOfBase(base: number, amount: number): number {
+  return base > 0 ? roundMoney((amount / base) * 100) : 0;
+}
+
+export function channelKeyForOrder(source: string, orderId: string): string {
+  const s = String(source || '').trim().toLowerCase();
+  if (s === 'shopee' || s === 'tiktok') return s;
+  if (s === TRAY_SOURCE_ATACADO || s === TRAY_SOURCE_VAREJO) return s;
+  if (s === 'tray') return resolveTraySubSource(orderId);
+  return s;
+}
+
+export async function buildMonthChannelRateMap(
+  prisma: any,
+  months: string[],
+  taxPercent = 5,
+): Promise<Map<string, MonthChannelRates>> {
+  const map = new Map<string, MonthChannelRates>();
+  for (const month of months) {
+    for (const ch of CONTRIBUTION_DASHBOARD_CHANNELS) {
+      const m = await computeSimulationMetrics(prisma, month, ch, taxPercent);
+      if (!m) continue;
+      map.set(`${month}|${ch}`, {
+        adsPercent: m.adsPercent,
+        fixedPercent: m.custoFixoPercent,
+        taxPercent: m.impostoPercent,
+      });
+    }
+  }
+  return map;
+}
+
+export function computeOrderProfitBreakdown(input: {
+  source: string;
+  orderId: string;
+  orderDate: Date;
+  orderTotal: number;
+  amountToReceive: number;
+  items: Array<{
+    productId: number | null;
+    quantity: number;
+    product?: { costPrice: number | null } | null;
+  }>;
+  combinedCost: Awaited<ReturnType<typeof loadCombinedCostLookup>>;
+  rateMap: Map<string, MonthChannelRates>;
+}): OrderProfitBreakdown {
+  const revenueBase = Number(input.orderTotal || 0);
+  const valorAReceber = roundMoney(input.amountToReceive);
+  const month = monthStrFromDate(new Date(input.orderDate));
+  const ch = channelKeyForOrder(input.source, input.orderId);
+  const rates = input.rateMap.get(`${month}|${ch}`) ?? {
+    adsPercent: 0,
+    fixedPercent: 0,
+    taxPercent: 5,
+  };
+
+  const orderDate = new Date(input.orderDate);
+  let custoProducao = 0;
+  for (const item of input.items) {
+    const unitCost = resolveCombinedCost(
+      input.combinedCost,
+      item.productId,
+      orderDate,
+      item.product?.costPrice,
+    );
+    custoProducao += unitCost * (item.quantity || 0);
+  }
+  custoProducao = roundMoney(custoProducao);
+
+  const custoAds = roundMoney(revenueBase * (rates.adsPercent / 100));
+  const custoOperacao = roundMoney(revenueBase * (rates.fixedPercent / 100));
+  const imposto = roundMoney(revenueBase * (rates.taxPercent / 100));
+  const lucroLiquido = roundMoney(
+    valorAReceber - custoProducao - custoAds - custoOperacao - imposto,
+  );
+
+  return {
+    valorAReceber,
+    custoProducao,
+    custoProducaoPercent: pctOfBase(revenueBase, custoProducao),
+    custoOperacao,
+    custoOperacaoPercent: rates.fixedPercent,
+    custoAds,
+    custoAdsPercent: rates.adsPercent,
+    imposto,
+    impostoPercent: rates.taxPercent,
+    lucroLiquido,
+    lucroLiquidoPercentGross: pctOfBase(revenueBase, lucroLiquido),
+    lucroLiquidoPercentReceived: pctOfBase(valorAReceber, lucroLiquido),
   };
 }

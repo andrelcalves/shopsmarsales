@@ -15,6 +15,7 @@ type BillPayment = {
 
 type Bill = {
   id: number;
+  supplier: string;
   description: string;
   invoiceNumber: string | null;
   totalAmount: number;
@@ -64,7 +65,7 @@ function defaultMonth(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-type PaymentWithBill = BillPayment & { billDescription: string; isFixedCost: boolean };
+type PaymentWithBill = BillPayment & { billDescription: string; billSupplier: string; isFixedCost: boolean };
 
 function buildBillsUrl(filters: {
   month: string;
@@ -129,6 +130,7 @@ export default function BillsDashboard() {
         row.payments.push({
           ...p,
           billDescription: bill.description,
+          billSupplier: bill.supplier || '',
           isFixedCost: bill.isFixedCost === true,
         });
       }
@@ -354,7 +356,12 @@ export default function BillsDashboard() {
                             .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
                             .map((p) => (
                               <tr key={p.id} className="hover:bg-slate-50">
-                                <td className="px-4 py-2 font-medium text-slate-900">{p.billDescription}</td>
+                                <td className="px-4 py-2 font-medium text-slate-900">
+                                  {p.billSupplier ? (
+                                    <span className="block text-[11px] text-slate-500">{p.billSupplier}</span>
+                                  ) : null}
+                                  {p.billDescription}
+                                </td>
                                 <td className="px-4 py-2">
                                   {p.isFixedCost ? (
                                     <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-800">

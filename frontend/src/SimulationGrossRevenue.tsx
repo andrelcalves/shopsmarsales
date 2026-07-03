@@ -49,6 +49,28 @@ type GrossRevenueItem = {
   lineTotal: number;
 };
 
+type GrossRevenueFeeLine = {
+  key: string;
+  label: string;
+  amount: number;
+  percentOfGross: number;
+};
+
+type OrderProfitBreakdown = {
+  valorAReceber: number;
+  custoProducao: number;
+  custoProducaoPercent: number;
+  custoOperacao: number;
+  custoOperacaoPercent: number;
+  custoAds: number;
+  custoAdsPercent: number;
+  imposto: number;
+  impostoPercent: number;
+  lucroLiquido: number;
+  lucroLiquidoPercentGross: number;
+  lucroLiquidoPercentReceived: number;
+};
+
 type GrossRevenueOrder = {
   orderId: string;
   source: string;
@@ -59,7 +81,12 @@ type GrossRevenueOrder = {
   sellerDiscount: number;
   commissionFee: number;
   serviceFee: number;
+  easyReturnFee: number;
+  autoRechargeFee: number;
   partnerCommission: number;
+  totalFees: number;
+  totalFeesPercent: number;
+  feeLines: GrossRevenueFeeLine[];
   amountToReceive: number;
   amountReceived: number | null;
   isSettled: boolean;
@@ -67,6 +94,7 @@ type GrossRevenueOrder = {
   orderTotal: number;
   items: GrossRevenueItem[];
   unitsInOrder: number;
+  profit?: OrderProfitBreakdown;
 };
 
 type GrossRevenueResponse = {
@@ -83,7 +111,11 @@ type GrossRevenueResponse = {
     sellerDiscount: number;
     commissionFee: number;
     serviceFee: number;
+    easyReturnFee: number;
+    autoRechargeFee: number;
     partnerCommission: number;
+    totalFees: number;
+    totalFeesPercent: number;
     amountToReceive: number;
     amountReceived: number;
   };
@@ -105,8 +137,66 @@ type Props = {
   onBack?: () => void;
 };
 
+function fmtPct(v: number) {
+  return `${Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+}
+
+function fmtPct2(v: number) {
+  return `${Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+}
+
+function DetailCard({
+  title,
+  children,
+  className,
+}: {
+  title: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "w-full sm:w-[280px] shrink-0 rounded-xl border border-slate-200 bg-white/95 p-4 shadow-sm",
+        className,
+      )}
+    >
+      <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-3">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function ProfitLine({
+  label,
+  value,
+  percent,
+  accent,
+}: {
+  label: string;
+  value: string;
+  percent?: string;
+  accent?: "positive" | "negative" | "neutral" | "header";
+}) {
+  const valueClass =
+    accent === "positive"
+      ? "text-emerald-800 font-extrabold"
+      : accent === "negative"
+        ? "text-red-600 font-extrabold"
+        : accent === "header"
+          ? "text-slate-900 font-extrabold"
+          : "text-slate-900 font-semibold";
+  return (
+    <div className="grid grid-cols-[1fr_52px_auto] items-baseline gap-x-2 text-xs">
+      <span className={accent === "header" ? "font-extrabold text-slate-800" : "text-slate-600"}>{label}</span>
+      <span className="text-right text-slate-500 tabular-nums whitespace-nowrap">{percent ?? ""}</span>
+      <span className={cn("text-right tabular-nums whitespace-nowrap", valueClass)}>{value}</span>
+    </div>
+  );
+}
+
 function hasFees(o: GrossRevenueOrder) {
-  return o.commissionFee > 0 || o.serviceFee > 0 || o.partnerCommission > 0;
+  return o.totalFees > 0 || o.commissionFee > 0 || o.serviceFee > 0 || o.partnerCommission > 0;
 }
 
 export default function SimulationGrossRevenue({ initialParams, onBack }: Props) {
@@ -253,7 +343,11 @@ export default function SimulationGrossRevenue({ initialParams, onBack }: Props)
                 { label: "Desc. vendedor", value: fmtMoney(data.totals.sellerDiscount), accent: false },
                 { label: "Comissão", value: fmtMoney(data.totals.commissionFee), accent: false },
                 { label: "Tarifa plataforma", value: fmtMoney(data.totals.serviceFee), accent: false },
+                { label: "Dev. Fácil", value: fmtMoney(data.totals.easyReturnFee ?? 0), accent: false },
+                { label: "Recarga auto.", value: fmtMoney(data.totals.autoRechargeFee ?? 0), accent: false },
                 { label: "Comissão parceiro", value: fmtMoney(data.totals.partnerCommission), accent: false },
+                { label: "Total taxas", value: fmtMoney(data.totals.totalFees ?? 0), accent: false },
+                { label: "% taxas", value: fmtPct(data.totals.totalFeesPercent ?? 0), accent: false },
                 { label: "Valor a receber", value: fmtMoney(data.totals.amountToReceive), accent: false },
                 { label: "Valor recebido", value: fmtMoney(data.totals.amountReceived), accent: false },
               ].map((s) => (
@@ -293,7 +387,7 @@ export default function SimulationGrossRevenue({ initialParams, onBack }: Props)
 
             <div className={cn(UI.card, "overflow-hidden")}>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[1100px] text-xs sm:text-sm">
+                <table className="w-full min-w-[1350px] text-xs sm:text-sm">
                   <thead className="bg-slate-100 text-left text-[10px] font-extrabold uppercase tracking-wider text-slate-600">
                     <tr>
                       <th className="px-3 py-2 w-8" />
@@ -305,6 +399,10 @@ export default function SimulationGrossRevenue({ initialParams, onBack }: Props)
                       <th className="px-3 py-2 text-right">Desc. vendedor</th>
                       <th className="px-3 py-2 text-right">Comissão</th>
                       <th className="px-3 py-2 text-right">Tarifa plat.</th>
+                      <th className="px-3 py-2 text-right">Dev. Fácil</th>
+                      <th className="px-3 py-2 text-right">Recarga auto.</th>
+                      <th className="px-3 py-2 text-right">Total taxas</th>
+                      <th className="px-3 py-2 text-right">% taxas</th>
                       <th className="px-3 py-2 text-right">Com. parceiro</th>
                       <th className="px-3 py-2 text-right">A receber</th>
                       <th className="px-3 py-2 text-right">Recebido</th>
@@ -360,6 +458,18 @@ export default function SimulationGrossRevenue({ initialParams, onBack }: Props)
                               {o.serviceFee > 0 ? fmtMoney(o.serviceFee) : "—"}
                             </td>
                             <td className="px-3 py-2 text-right tabular-nums">
+                              {o.easyReturnFee > 0 ? fmtMoney(o.easyReturnFee) : "—"}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums">
+                              {o.autoRechargeFee > 0 ? fmtMoney(o.autoRechargeFee) : "—"}
+                            </td>
+                            <td className="px-3 py-2 text-right font-semibold tabular-nums">
+                              {o.totalFees > 0 ? fmtMoney(o.totalFees) : "—"}
+                            </td>
+                            <td className="px-3 py-2 text-right font-semibold tabular-nums text-rose-700">
+                              {o.totalFees > 0 ? fmtPct(o.totalFeesPercent) : "—"}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums">
                               {o.partnerCommission > 0 ? fmtMoney(o.partnerCommission) : "—"}
                             </td>
                             <td className="px-3 py-2 text-right font-bold tabular-nums">
@@ -386,47 +496,147 @@ export default function SimulationGrossRevenue({ initialParams, onBack }: Props)
                           </tr>
                           {isOpen && (
                             <tr className="bg-slate-50/60">
-                              <td colSpan={14} className="px-4 py-3">
-                                <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">
-                                  Itens do pedido · total pedido {fmtMoney(o.orderTotal)}
-                                  {hasFees(o) ? null : (
-                                    <span className="ml-2 font-normal normal-case text-amber-700">
-                                      (taxas não importadas — faça upload do income ou relatório onhold TikTok)
-                                    </span>
-                                  )}
+                              <td colSpan={17} className="px-3 py-3">
+                                <div className="flex flex-col 2xl:flex-row 2xl:items-start gap-3">
+                                  <div className="w-fit max-w-full shrink-0">
+                                    <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-2">
+                                      Itens do pedido · total pedido {fmtMoney(o.orderTotal)}
+                                      {hasFees(o) ? null : (
+                                        <span className="ml-2 font-normal normal-case text-amber-700">
+                                          (taxas não importadas — faça upload do income Shopee ou relatório onhold TikTok)
+                                        </span>
+                                      )}
+                                    </div>
+                                    <table className="text-xs">
+                                      <thead>
+                                        <tr className="text-slate-500">
+                                          <th className="text-left py-1 pr-3">Produto</th>
+                                          <th className="text-right py-1 px-2">Qtd</th>
+                                          <th className="text-right py-1 px-2">Unit.</th>
+                                          <th className="text-right py-1 px-2">Bruto linha</th>
+                                          <th className="text-right py-1 px-2">Desc. vendedor</th>
+                                          <th className="text-right py-1 pl-2">Total linha</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-200/80">
+                                        {o.items.map((it, i) => (
+                                          <tr key={`${it.productCode}-${i}`}>
+                                            <td className="py-1 pr-3 text-slate-800 max-w-[280px]">{it.name}</td>
+                                            <td className="py-1 px-2 text-right font-semibold">{it.quantity}</td>
+                                            <td className="py-1 px-2 text-right tabular-nums">
+                                              {fmtMoney(it.unitPrice)}
+                                            </td>
+                                            <td className="py-1 px-2 text-right tabular-nums">
+                                              {fmtMoney(it.lineGross)}
+                                            </td>
+                                            <td className="py-1 px-2 text-right tabular-nums">
+                                              {it.sellerDiscount > 0 ? fmtMoney(it.sellerDiscount) : "—"}
+                                            </td>
+                                            <td className="py-1 pl-2 text-right font-semibold tabular-nums">
+                                              {fmtMoney(it.lineTotal)}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+
+                                  <div className="flex flex-col sm:flex-row gap-3 2xl:ml-auto 2xl:sticky 2xl:right-0 2xl:top-0 2xl:z-10 shrink-0">
+                                    <DetailCard title="Detalhamento de taxas">
+                                      <div className="space-y-2 text-xs">
+                                        <div className="grid grid-cols-[1fr_auto] items-baseline gap-x-6 gap-y-1">
+                                          <span className="text-slate-600">Valor dos produtos</span>
+                                          <span className="font-semibold tabular-nums text-slate-900 text-right whitespace-nowrap">
+                                            {fmtMoney(o.grossProductSales)}
+                                          </span>
+                                        </div>
+                                        {(o.feeLines?.length ? o.feeLines : []).map((line) => (
+                                          <div
+                                            key={line.key}
+                                            className="grid grid-cols-[1fr_auto] items-baseline gap-x-6 gap-y-1"
+                                          >
+                                            <span className="text-slate-600">{line.label}</span>
+                                            <span className="tabular-nums text-slate-800 text-right whitespace-nowrap">
+                                              {fmtMoney(line.amount)}
+                                              <span className="ml-2 text-slate-500">({fmtPct(line.percentOfGross)})</span>
+                                            </span>
+                                          </div>
+                                        ))}
+                                        {!hasFees(o) ? (
+                                          <p className="text-amber-700 pt-1">
+                                            Nenhuma taxa importada para este pedido.
+                                          </p>
+                                        ) : null}
+                                        <div className="border-t border-slate-200 pt-2 grid grid-cols-[1fr_auto] items-baseline gap-x-6 font-extrabold">
+                                          <span className="text-slate-800">Total taxas</span>
+                                          <span className="tabular-nums text-slate-900 text-right whitespace-nowrap">
+                                            {fmtMoney(o.totalFees ?? 0)}
+                                            <span className="ml-2 text-rose-700">({fmtPct(o.totalFeesPercent ?? 0)})</span>
+                                          </span>
+                                        </div>
+                                        <div className="border-t border-emerald-200 pt-2 grid grid-cols-[1fr_auto] items-baseline gap-x-6 font-extrabold">
+                                          <span className="text-emerald-800">Valor recebido</span>
+                                          <span className="tabular-nums text-emerald-800 text-right whitespace-nowrap">
+                                            {o.amountReceived != null
+                                              ? fmtMoney(o.amountReceived)
+                                              : fmtMoney(o.amountToReceive)}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </DetailCard>
+
+                                    {o.profit ? (
+                                      <DetailCard title="Lucro líquido do pedido">
+                                        <div className="space-y-2">
+                                          <ProfitLine
+                                            label="Valor a receber"
+                                            value={fmtMoney(o.profit.valorAReceber)}
+                                            accent="header"
+                                          />
+                                          <div className="border-t border-slate-100 pt-2 space-y-2">
+                                            <ProfitLine
+                                              label="Custo de produção"
+                                              percent={fmtPct2(o.profit.custoProducaoPercent)}
+                                              value={fmtMoney(o.profit.custoProducao)}
+                                            />
+                                            <ProfitLine
+                                              label="Custo de operação"
+                                              percent={fmtPct2(o.profit.custoOperacaoPercent)}
+                                              value={fmtMoney(o.profit.custoOperacao)}
+                                            />
+                                            <ProfitLine
+                                              label="Custo de ADS"
+                                              percent={fmtPct2(o.profit.custoAdsPercent)}
+                                              value={fmtMoney(o.profit.custoAds)}
+                                            />
+                                            <ProfitLine
+                                              label="Imposto"
+                                              percent={fmtPct2(o.profit.impostoPercent)}
+                                              value={fmtMoney(o.profit.imposto)}
+                                            />
+                                          </div>
+                                          <div className="border-t border-emerald-200 pt-2 space-y-2">
+                                            <ProfitLine
+                                              label="Lucro líquido"
+                                              value={fmtMoney(o.profit.lucroLiquido)}
+                                              accent={o.profit.lucroLiquido >= 0 ? "positive" : "negative"}
+                                            />
+                                            <ProfitLine
+                                              label="% Lucro líquido"
+                                              percent={fmtPct2(o.profit.lucroLiquidoPercentGross)}
+                                              value={fmtPct2(o.profit.lucroLiquidoPercentReceived)}
+                                              accent={o.profit.lucroLiquido >= 0 ? "positive" : "negative"}
+                                            />
+                                          </div>
+                                          <p className="text-[10px] text-slate-400 leading-snug pt-1">
+                                            % sobre faturamento e sobre valor a receber. Custos proporcionais ao mês/canal
+                                            (mesma lógica da simulação).
+                                          </p>
+                                        </div>
+                                      </DetailCard>
+                                    ) : null}
+                                  </div>
                                 </div>
-                                <table className="w-full min-w-[600px] text-xs">
-                                  <thead>
-                                    <tr className="text-slate-500">
-                                      <th className="text-left py-1 pr-2">Produto</th>
-                                      <th className="text-right py-1 px-2">Qtd</th>
-                                      <th className="text-right py-1 px-2">Unit.</th>
-                                      <th className="text-right py-1 px-2">Bruto linha</th>
-                                      <th className="text-right py-1 px-2">Desc. vendedor</th>
-                                      <th className="text-right py-1 pl-2">Total linha</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-slate-200/80">
-                                    {o.items.map((it, i) => (
-                                      <tr key={`${it.productCode}-${i}`}>
-                                        <td className="py-1 pr-2 text-slate-800">{it.name}</td>
-                                        <td className="py-1 px-2 text-right font-semibold">{it.quantity}</td>
-                                        <td className="py-1 px-2 text-right tabular-nums">
-                                          {fmtMoney(it.unitPrice)}
-                                        </td>
-                                        <td className="py-1 px-2 text-right tabular-nums">
-                                          {fmtMoney(it.lineGross)}
-                                        </td>
-                                        <td className="py-1 px-2 text-right tabular-nums">
-                                          {it.sellerDiscount > 0 ? fmtMoney(it.sellerDiscount) : "—"}
-                                        </td>
-                                        <td className="py-1 pl-2 text-right font-semibold tabular-nums">
-                                          {fmtMoney(it.lineTotal)}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
                               </td>
                             </tr>
                           )}
@@ -435,7 +645,7 @@ export default function SimulationGrossRevenue({ initialParams, onBack }: Props)
                     })}
                     {data.orders.length === 0 && (
                       <tr>
-                        <td colSpan={14} className="px-4 py-10 text-center text-slate-500">
+                        <td colSpan={17} className="px-4 py-10 text-center text-slate-500">
                           Nenhum pedido no período selecionado.
                         </td>
                       </tr>
