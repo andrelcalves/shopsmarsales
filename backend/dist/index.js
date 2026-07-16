@@ -6,8 +6,11 @@ import { PrismaClient } from '@prisma/client';
 import fs from 'fs';
 import path from 'path';
 import util from 'util';
+import crypto from 'crypto';
 import { createRequire } from 'module';
 import * as shopeeApi from './shopeeApi.js';
+import * as tiktokShopApi from './tiktokShopApi.js';
+import * as tiktokAdsApi from './tiktokAdsApi.js';
 import { parseTikTokIncomeReport } from './tiktokIncome.js';
 import { parseTikTokOnholdReport } from './tiktokOnhold.js';
 import { parseShopeeIncomeReport } from './shopeeIncome.js';
@@ -16,6 +19,7 @@ import { resolveCombinedCost, } from './masterProductCost.js';
 import { registerMasterProductRoutes, loadCombinedCostLookup, buildMasterStockCurrent, } from './masterProductRoutes.js';
 import { computeSimulationMetrics, computeContributionDashboard, buildMonthChannelRateMap, computeOrderProfitBreakdown, listMonthsInclusive } from './simulationMetrics.js';
 import { parseNubankStatementCsv } from './nubankStatement.js';
+import { parseNuvemshopSalesRows, SOURCE_ATACADO } from './nuvemshopOrders.js';
 function parseDateOnly(dateStr) {
     const s = String(dateStr ?? '').trim();
     if (!s)
@@ -96,10 +100,11 @@ function pick(row, keys) {
     }
     return undefined;
 }
-/** Tray: loja atacado 987162 (pedidos costumam começar com 5); varejo 1178940 (com 2). */
+/** Atacado (ex-Tray / Nuvemshop) e Tray varejo legado. */
 const TRAY_STORE_ID_ATACADO = '987162';
 const TRAY_STORE_ID_VAREJO = '1178940';
-const TRAY_SOURCE_ATACADO = 'tray_atacado';
+/** Canal Atacado (Nuvemshop). Valor legado `tray_atacado` é migrado no banco. */
+const TRAY_SOURCE_ATACADO = 'atacado';
 const TRAY_SOURCE_VAREJO = 'tray_varejo';
 const TRAY_ORDER_SOURCES_LIST = [TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO, 'tray'];
 /** Alinhado ao PRD (vendas diárias por canal): não entram em métricas de venda agregadas. */
@@ -146,7 +151,7 @@ function resolveTraySubSource(row, orderId) {
 }
 function isTrayOrderSource(source) {
     const s = String(source || '').toLowerCase();
-    return s === 'tray' || s === TRAY_SOURCE_ATACADO || s === TRAY_SOURCE_VAREJO;
+    return s === 'tray' || s === TRAY_SOURCE_ATACADO || s === 'tray_atacado' || s === TRAY_SOURCE_VAREJO;
 }
 /** Upload de CSV Tray (pedidos ou itens): delimitador `;` e parser de linha Tray. */
 function isTrayUploadSource(source) {
@@ -166,7 +171,8 @@ function channelLabelForChart(source) {
         case 'tiktok':
             return 'TikTok';
         case TRAY_SOURCE_ATACADO:
-            return 'Tray Atacado';
+        case 'tray_atacado':
+            return 'Atacado';
         case TRAY_SOURCE_VAREJO:
             return 'Tray Varejo';
         case 'tray':
@@ -176,11 +182,12 @@ function channelLabelForChart(source) {
     }
 }
 function bucketTrayMetrics(source, orderId) {
-    if (source === TRAY_SOURCE_ATACADO)
+    const s = String(source || '').toLowerCase();
+    if (s === TRAY_SOURCE_ATACADO || s === 'tray_atacado')
         return 'trayAtacado';
-    if (source === TRAY_SOURCE_VAREJO)
+    if (s === TRAY_SOURCE_VAREJO)
         return 'trayVarejo';
-    if (source === 'tray') {
+    if (s === 'tray') {
         const r = resolveTraySubSource(null, orderId);
         if (r === TRAY_SOURCE_ATACADO)
             return 'trayAtacado';
@@ -683,7 +690,7 @@ const standardizeData = (row, source) => {
             const productName = channelVal && String(channelVal).trim()
                 ? `Pedido (${String(channelVal).trim()})`
                 : traySource === TRAY_SOURCE_ATACADO
-                    ? 'Pedido (Tray Atacado)'
+                    ? 'Pedido (Atacado)'
                     : traySource === TRAY_SOURCE_VAREJO
                         ? 'Pedido (Tray Varejo)'
                         : 'Pedido (Tray)';
@@ -729,7 +736,11 @@ const standardizeTrayItem = (row, uploadTraySource) => {
         if (quantity <= 0)
             return null;
         const us = String(uploadTraySource || 'tray').trim().toLowerCase();
-        const traySource = us === TRAY_SOURCE_ATACADO || us === TRAY_SOURCE_VAREJO ? us : resolveTraySubSource(row, orderId);
+        const traySource = us === TRAY_SOURCE_ATACADO || us === 'tray_atacado' || us === TRAY_SOURCE_VAREJO
+            ? us === 'tray_atacado'
+                ? TRAY_SOURCE_ATACADO
+                : us
+            : resolveTraySubSource(row, orderId);
         return {
             orderId,
             source: traySource,
@@ -937,20 +948,120 @@ async function main() {
                 const source = String(first(sourceRaw) ?? '')
                     .trim()
                     .toLowerCase();
-                const allowedUpload = ['shopee', 'tiktok', 'tray', TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO];
+                const allowedUpload = ['shopee', 'tiktok', 'tray', TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO, 'tray_atacado'];
                 if (!source || !allowedUpload.includes(source)) {
                     return res.status(400).json({ message: 'Source inválido.' });
                 }
+                // Aceita legado tray_atacado e normaliza para atacado
+                const normalizedSource = source === 'tray_atacado' ? TRAY_SOURCE_ATACADO : source;
                 const ext = String(path.extname(filepath || '')).toLowerCase();
-                // CSV: Tray usa ';', TikTok/Shopee usam ','
+                // CSV: Tray/Atacado/Nuvemshop usam ';', TikTok/Shopee usam ','
                 const workbook = ext === '.csv'
-                    ? xlsx.readFile(filepath, { FS: isTrayUploadSource(source) ? ';' : ',', raw: true })
+                    ? xlsx.readFile(filepath, {
+                        // Nuvemshop/Tray BR exports: ';' + Windows-1252 (não UTF-8)
+                        FS: isTrayUploadSource(normalizedSource) || normalizedSource === TRAY_SOURCE_ATACADO ? ';' : ',',
+                        raw: true,
+                        codepage: isTrayUploadSource(normalizedSource) || normalizedSource === TRAY_SOURCE_ATACADO ? 1252 : undefined,
+                    })
                     : xlsx.readFile(filepath);
                 const sheetName = workbook.SheetNames[0];
                 const jsonData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
                     defval: '',
                     raw: true,
                 });
+                // Canal Atacado: export Nuvemshop (pedidos + itens no mesmo arquivo)
+                if (normalizedSource === TRAY_SOURCE_ATACADO) {
+                    const { orders: nuvemOrders, skipped } = parseNuvemshopSalesRows(jsonData);
+                    if (nuvemOrders.length === 0) {
+                        return res.status(400).json({
+                            message: 'Nenhum pedido Atacado encontrado. Use o CSV de Vendas da Nuvemshop (colunas Número do Pedido, Total, SKU…).',
+                            skipped,
+                        });
+                    }
+                    const productIds = new Map();
+                    const ops = [];
+                    let itemCount = 0;
+                    for (const o of nuvemOrders) {
+                        const firstItem = o.items[0];
+                        const qty = o.items.reduce((s, it) => s + it.quantity, 0);
+                        ops.push(prisma.order.upsert({
+                            where: { orderId_source: { orderId: o.orderId, source: SOURCE_ATACADO } },
+                            update: {
+                                orderDate: o.orderDate,
+                                status: o.status,
+                                totalPrice: Number(o.totalPrice.toFixed(2)),
+                                quantity: qty || 1,
+                                productName: firstItem?.name || `Pedido Atacado #${o.orderNumber}`,
+                                freight: o.freight > 0 ? o.freight : null,
+                                paymentType: o.paymentType || null,
+                                paymentId: o.paymentId || null,
+                                serviceFee: o.fees > 0 ? o.fees : null,
+                            },
+                            create: {
+                                orderId: o.orderId,
+                                source: SOURCE_ATACADO,
+                                orderDate: o.orderDate,
+                                status: o.status,
+                                totalPrice: Number(o.totalPrice.toFixed(2)),
+                                quantity: qty || 1,
+                                productName: firstItem?.name || `Pedido Atacado #${o.orderNumber}`,
+                                freight: o.freight > 0 ? o.freight : null,
+                                paymentType: o.paymentType || null,
+                                paymentId: o.paymentId || null,
+                                serviceFee: o.fees > 0 ? o.fees : null,
+                            },
+                        }));
+                        for (const it of o.items) {
+                            const pkey = `${SOURCE_ATACADO}_${it.productCode}`;
+                            if (!productIds.has(pkey)) {
+                                const id = await ensureProduct(prisma, SOURCE_ATACADO, it.productCode, it.name, {
+                                    sku: it.productCode,
+                                });
+                                productIds.set(pkey, id);
+                            }
+                            const productId = productIds.get(pkey);
+                            itemCount++;
+                            ops.push(prisma.orderItem.upsert({
+                                where: {
+                                    orderId_source_productCode: {
+                                        orderId: o.orderId,
+                                        source: SOURCE_ATACADO,
+                                        productCode: it.productCode,
+                                    },
+                                },
+                                update: {
+                                    name: it.name,
+                                    unitPrice: it.unitPrice,
+                                    quantity: it.quantity,
+                                    totalPrice: it.totalPrice,
+                                    sellerDiscount: it.sellerDiscount || 0,
+                                    discount: it.sellerDiscount || 0,
+                                    productId,
+                                },
+                                create: {
+                                    orderId: o.orderId,
+                                    source: SOURCE_ATACADO,
+                                    productCode: it.productCode,
+                                    name: it.name,
+                                    unitPrice: it.unitPrice,
+                                    quantity: it.quantity,
+                                    totalPrice: it.totalPrice,
+                                    sellerDiscount: it.sellerDiscount || 0,
+                                    discount: it.sellerDiscount || 0,
+                                    productId,
+                                },
+                            }));
+                        }
+                    }
+                    const results = await prisma.$transaction(ops);
+                    return res.status(200).json({
+                        message: 'Pedidos Atacado (Nuvemshop) processados com sucesso.',
+                        count: nuvemOrders.length,
+                        items: itemCount,
+                        operations: results.length,
+                        skipped,
+                    });
+                }
                 if (source === 'shopee') {
                     const rowsRaw = jsonData
                         .map((row) => standardizeShopeeRow(row))
@@ -1221,10 +1332,11 @@ async function main() {
                     return res.status(400).json({ message: 'Caminho do arquivo não encontrado.' });
                 const sourceRaw = fields.source;
                 const source = String(first(sourceRaw) ?? '').trim().toLowerCase();
-                const allowedItems = ['tray', TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO];
+                const allowedItems = ['tray', TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO, 'tray_atacado'];
                 if (!allowedItems.includes(source)) {
-                    return res.status(400).json({ message: 'Source inválido (use tray, tray_atacado ou tray_varejo).' });
+                    return res.status(400).json({ message: 'Source inválido (use tray, atacado ou tray_varejo).' });
                 }
+                const itemsSource = source === 'tray_atacado' ? TRAY_SOURCE_ATACADO : source;
                 const ext = String(path.extname(filepath || '')).toLowerCase();
                 const workbook = ext === '.csv'
                     ? xlsx.readFile(filepath, { FS: ';', raw: true })
@@ -1235,7 +1347,7 @@ async function main() {
                     raw: true,
                 });
                 const items = jsonData
-                    .map((row) => standardizeTrayItem(row, source))
+                    .map((row) => standardizeTrayItem(row, itemsSource))
                     .filter((it) => it !== null);
                 // Agrupar por pedido para atualizar metadados no Order (sem alterar totalPrice,
                 // pois o canal Tray pode ter desconto progressivo e o total correto vem da planilha de pedidos)
@@ -4232,6 +4344,391 @@ async function main() {
         catch (e) {
             console.error(e);
             return res.status(500).json({ message: 'Erro ao desconectar.' });
+        }
+    });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TIKTOK SHOP PARTNER API — vendas/pedidos (substitui/complementa upload manual)
+    // ═══════════════════════════════════════════════════════════════════════════
+    app.get('/api/tiktok-shop/status', async (_req, res) => {
+        try {
+            const integration = await prisma.tiktokShopIntegration.findFirst({ orderBy: { id: 'desc' } });
+            if (!integration)
+                return res.json({ configured: false, status: 'disconnected' });
+            const now = new Date();
+            let status = integration.status;
+            if (status === 'connected' && integration.tokenExpiresAt && integration.tokenExpiresAt < now) {
+                status = integration.refreshExpiresAt && integration.refreshExpiresAt > now ? 'token_expired' : 'expired';
+            }
+            return res.json({
+                configured: true,
+                status,
+                shopId: integration.shopId,
+                shopName: integration.shopName,
+                lastSyncAt: integration.lastSyncAt,
+                tokenExpiresAt: integration.tokenExpiresAt,
+                refreshExpiresAt: integration.refreshExpiresAt,
+            });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao buscar status da integração TikTok Shop.' });
+        }
+    });
+    // Salva App Key / App Secret (criados no TikTok Shop Partner Center)
+    app.post('/api/tiktok-shop/config', express.json(), async (req, res) => {
+        try {
+            const { appKey, appSecret } = req.body;
+            if (!appKey || !appSecret) {
+                return res.status(400).json({ message: 'App Key e App Secret são obrigatórios.' });
+            }
+            const prismaAny = prisma;
+            const existing = await prismaAny.tiktokShopIntegration.findFirst({ orderBy: { id: 'desc' } });
+            if (existing) {
+                await prismaAny.tiktokShopIntegration.update({
+                    where: { id: existing.id },
+                    data: { appKey: String(appKey), appSecret: String(appSecret) },
+                });
+            }
+            else {
+                await prismaAny.tiktokShopIntegration.create({
+                    data: { appKey: String(appKey), appSecret: String(appSecret) },
+                });
+            }
+            return res.json({ success: true });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao salvar configuração TikTok Shop.' });
+        }
+    });
+    app.get('/api/tiktok-shop/auth-url', async (_req, res) => {
+        try {
+            const integration = await prisma.tiktokShopIntegration.findFirst({ orderBy: { id: 'desc' } });
+            if (!integration)
+                return res.status(400).json({ message: 'Configure App Key e App Secret primeiro.' });
+            const state = crypto.randomUUID();
+            const url = tiktokShopApi.buildAuthUrl(integration.appKey, state);
+            return res.json({ url, state });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao gerar URL de autorização.' });
+        }
+    });
+    // Callback chamado pela TikTok Shop após o vendedor autorizar o app (?code=...)
+    app.get('/api/tiktok-shop/callback', async (req, res) => {
+        try {
+            const code = String(req.query.code ?? '');
+            if (!code)
+                return res.status(400).send('Parâmetro code é obrigatório.');
+            const integration = await prisma.tiktokShopIntegration.findFirst({ orderBy: { id: 'desc' } });
+            if (!integration)
+                return res.status(400).send('Integração não configurada.');
+            const tokenRes = await tiktokShopApi.getAccessToken(integration.appKey, integration.appSecret, code);
+            if (tokenRes.code !== 0 || !tokenRes.data) {
+                console.error('TikTok Shop token error:', tokenRes);
+                return res.status(400).send(`Erro ao obter token: ${tokenRes.message}`);
+            }
+            const now = new Date();
+            const { access_token, access_token_expire_in, refresh_token, refresh_token_expire_in } = tokenRes.data;
+            let shopId = null;
+            let shopName = null;
+            let shopCipher = null;
+            try {
+                const shopsRes = await tiktokShopApi.getAuthorizedShops(integration.appKey, integration.appSecret, access_token);
+                const shop = shopsRes.data?.shops?.[0];
+                if (shop) {
+                    shopId = shop.id;
+                    shopName = shop.name;
+                    shopCipher = shop.cipher;
+                }
+            }
+            catch (e) {
+                console.error('Erro ao buscar lojas autorizadas:', e);
+            }
+            await prisma.tiktokShopIntegration.update({
+                where: { id: integration.id },
+                data: {
+                    accessToken: access_token,
+                    refreshToken: refresh_token,
+                    tokenExpiresAt: new Date(now.getTime() + (access_token_expire_in ?? 7200) * 1000),
+                    refreshExpiresAt: new Date(now.getTime() + (refresh_token_expire_in ?? 365 * 24 * 3600) * 1000),
+                    shopId,
+                    shopName,
+                    shopCipher,
+                    status: 'connected',
+                },
+            });
+            const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+            return res.redirect(`${frontendUrl}?tiktok_shop_connected=1`);
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).send('Erro interno ao processar callback.');
+        }
+    });
+    async function ensureValidTiktokShopToken() {
+        const integration = await prisma.tiktokShopIntegration.findFirst({ orderBy: { id: 'desc' } });
+        if (!integration?.accessToken || !integration?.shopCipher)
+            throw new Error('Integração TikTok Shop não conectada.');
+        const now = new Date();
+        if (integration.tokenExpiresAt && integration.tokenExpiresAt > now)
+            return integration;
+        if (!integration.refreshToken || (integration.refreshExpiresAt && integration.refreshExpiresAt < now)) {
+            await prisma.tiktokShopIntegration.update({ where: { id: integration.id }, data: { status: 'expired' } });
+            throw new Error('Refresh token expirado. Reconecte a loja TikTok Shop.');
+        }
+        const tokenRes = await tiktokShopApi.refreshAccessToken(integration.appKey, integration.appSecret, integration.refreshToken);
+        if (tokenRes.code !== 0 || !tokenRes.data) {
+            await prisma.tiktokShopIntegration.update({ where: { id: integration.id }, data: { status: 'expired' } });
+            throw new Error(`Erro ao renovar token: ${tokenRes.message}`);
+        }
+        const { access_token, access_token_expire_in, refresh_token, refresh_token_expire_in } = tokenRes.data;
+        return prisma.tiktokShopIntegration.update({
+            where: { id: integration.id },
+            data: {
+                accessToken: access_token,
+                refreshToken: refresh_token,
+                tokenExpiresAt: new Date(now.getTime() + (access_token_expire_in ?? 7200) * 1000),
+                refreshExpiresAt: new Date(now.getTime() + (refresh_token_expire_in ?? 365 * 24 * 3600) * 1000),
+                status: 'connected',
+            },
+        });
+    }
+    // Sincroniza pedidos TikTok Shop direto pela API (alternativa ao upload manual de planilha)
+    // body opcional: { month: "2026-06" } ou { daysBack: 30 }
+    app.post('/api/tiktok-shop/sync', express.json(), async (req, res) => {
+        try {
+            const integration = await ensureValidTiktokShopToken();
+            let createTimeGe;
+            let createTimeLt;
+            const monthStr = String(req.body?.month ?? '').trim();
+            if (monthStr) {
+                const monthStart = monthStartFromYYYYMM(monthStr);
+                if (!monthStart)
+                    return res.status(400).json({ message: 'month inválido. Use YYYY-MM.' });
+                const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
+                createTimeGe = Math.floor(monthStart.getTime() / 1000);
+                createTimeLt = Math.floor(monthEnd.getTime() / 1000);
+            }
+            else {
+                const daysBack = Number(req.body?.daysBack) || 30;
+                const nowSec = Math.floor(Date.now() / 1000);
+                createTimeGe = nowSec - daysBack * 24 * 60 * 60;
+                createTimeLt = nowSec;
+            }
+            const orders = await tiktokShopApi.fetchAllOrders(integration.appKey, integration.appSecret, integration.accessToken, integration.shopCipher, createTimeGe, createTimeLt);
+            let synced = 0;
+            for (const order of orders) {
+                const orderId = order.id;
+                const orderDate = new Date(order.create_time * 1000);
+                const items = order.line_items || [];
+                const productName = items.length > 0
+                    ? items.map((i) => i.product_name).join(' + ')
+                    : 'Produto TikTok Shop';
+                const quantity = items.length || 1;
+                const totalPrice = parseFloat(order.payment?.total_amount ?? '0') || 0;
+                await prisma.order.upsert({
+                    where: { orderId_source: { orderId, source: 'tiktok' } },
+                    update: { orderDate, productName, quantity, totalPrice, status: order.status },
+                    create: { orderId, orderDate, productName, quantity, totalPrice, source: 'tiktok', status: order.status },
+                });
+                for (const item of items) {
+                    const productCode = item.seller_sku || item.sku_id || item.product_id;
+                    const unitPrice = parseFloat(item.sale_price ?? '0') || 0;
+                    const product = await prisma.product.upsert({
+                        where: { code: `tiktok_${productCode}` },
+                        update: { name: item.product_name, source: 'tiktok' },
+                        create: { code: `tiktok_${productCode}`, name: item.product_name, source: 'tiktok' },
+                    });
+                    await prisma.orderItem.upsert({
+                        where: { orderId_source_productCode: { orderId, source: 'tiktok', productCode } },
+                        update: { name: item.product_name, unitPrice, quantity: 1, totalPrice: unitPrice, productId: product.id },
+                        create: {
+                            orderId, source: 'tiktok', productCode, name: item.product_name,
+                            unitPrice, quantity: 1, totalPrice: unitPrice, productId: product.id,
+                        },
+                    });
+                }
+                synced++;
+            }
+            await prisma.tiktokShopIntegration.update({
+                where: { id: integration.id },
+                data: { lastSyncAt: new Date() },
+            });
+            return res.json({ success: true, synced, total: orders.length });
+        }
+        catch (e) {
+            console.error('TikTok Shop sync error:', e);
+            return res.status(500).json({ message: e.message || 'Erro ao sincronizar pedidos TikTok Shop.' });
+        }
+    });
+    app.post('/api/tiktok-shop/disconnect', async (_req, res) => {
+        try {
+            const integration = await prisma.tiktokShopIntegration.findFirst({ orderBy: { id: 'desc' } });
+            if (integration) {
+                await prisma.tiktokShopIntegration.update({
+                    where: { id: integration.id },
+                    data: {
+                        accessToken: null, refreshToken: null, tokenExpiresAt: null, refreshExpiresAt: null,
+                        shopId: null, shopName: null, shopCipher: null, status: 'disconnected',
+                    },
+                });
+            }
+            return res.json({ success: true });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao desconectar TikTok Shop.' });
+        }
+    });
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TIKTOK ADS (BUSINESS/MARKETING API) — custo mensal de anúncios → tabela AdSpend
+    // ═══════════════════════════════════════════════════════════════════════════
+    app.get('/api/tiktok-ads/status', async (_req, res) => {
+        try {
+            const integration = await prisma.tiktokAdsIntegration.findFirst({ orderBy: { id: 'desc' } });
+            if (!integration)
+                return res.json({ configured: false, status: 'disconnected' });
+            return res.json({
+                configured: true,
+                status: integration.status,
+                advertiserId: integration.advertiserId,
+                advertiserName: integration.advertiserName,
+                lastSyncAt: integration.lastSyncAt,
+            });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao buscar status da integração TikTok Ads.' });
+        }
+    });
+    // Salva App ID / App Secret (criados no TikTok Business API Developer Portal)
+    app.post('/api/tiktok-ads/config', express.json(), async (req, res) => {
+        try {
+            const { appId, appSecret } = req.body;
+            if (!appId || !appSecret) {
+                return res.status(400).json({ message: 'App ID e App Secret são obrigatórios.' });
+            }
+            const prismaAny = prisma;
+            const existing = await prismaAny.tiktokAdsIntegration.findFirst({ orderBy: { id: 'desc' } });
+            if (existing) {
+                await prismaAny.tiktokAdsIntegration.update({
+                    where: { id: existing.id },
+                    data: { appId: String(appId), appSecret: String(appSecret) },
+                });
+            }
+            else {
+                await prismaAny.tiktokAdsIntegration.create({
+                    data: { appId: String(appId), appSecret: String(appSecret) },
+                });
+            }
+            return res.json({ success: true });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao salvar configuração TikTok Ads.' });
+        }
+    });
+    app.get('/api/tiktok-ads/auth-url', async (req, res) => {
+        try {
+            const integration = await prisma.tiktokAdsIntegration.findFirst({ orderBy: { id: 'desc' } });
+            if (!integration)
+                return res.status(400).json({ message: 'Configure App ID e App Secret primeiro.' });
+            const state = crypto.randomUUID();
+            const redirectUrl = `${req.protocol}://${req.get('host')}/api/tiktok-ads/callback`;
+            const url = tiktokAdsApi.buildAuthUrl(integration.appId, redirectUrl, state);
+            return res.json({ url, state, redirectUrl });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao gerar URL de autorização.' });
+        }
+    });
+    // Callback chamado pela TikTok após autorizar o app (?auth_code=...)
+    app.get('/api/tiktok-ads/callback', async (req, res) => {
+        try {
+            const authCode = String(req.query.auth_code ?? req.query.code ?? '');
+            if (!authCode)
+                return res.status(400).send('Parâmetro auth_code é obrigatório.');
+            const integration = await prisma.tiktokAdsIntegration.findFirst({ orderBy: { id: 'desc' } });
+            if (!integration)
+                return res.status(400).send('Integração não configurada.');
+            const tokenRes = await tiktokAdsApi.getAccessToken(integration.appId, integration.appSecret, authCode);
+            if (tokenRes.code !== 0 || !tokenRes.data) {
+                console.error('TikTok Ads token error:', tokenRes);
+                return res.status(400).send(`Erro ao obter token: ${tokenRes.message}`);
+            }
+            const { access_token, advertiser_ids } = tokenRes.data;
+            const advertiserId = advertiser_ids?.[0] ?? null;
+            let advertiserName = null;
+            if (advertiserId) {
+                try {
+                    const infoRes = await tiktokAdsApi.getAdvertiserInfo(access_token, [advertiserId]);
+                    advertiserName = infoRes.data?.list?.[0]?.name ?? null;
+                }
+                catch (e) {
+                    console.error('Erro ao buscar info do advertiser:', e);
+                }
+            }
+            await prisma.tiktokAdsIntegration.update({
+                where: { id: integration.id },
+                data: { accessToken: access_token, advertiserId, advertiserName, status: 'connected' },
+            });
+            const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+            return res.redirect(`${frontendUrl}?tiktok_ads_connected=1`);
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).send('Erro interno ao processar callback.');
+        }
+    });
+    // Busca o gasto do mês na TikTok Ads e grava em AdSpend (channel="tiktok")
+    // body: { month: "2026-06" }
+    app.post('/api/tiktok-ads/sync', express.json(), async (req, res) => {
+        try {
+            const integration = await prisma.tiktokAdsIntegration.findFirst({ orderBy: { id: 'desc' } });
+            if (!integration?.accessToken || !integration?.advertiserId) {
+                return res.status(400).json({ message: 'Integração TikTok Ads não conectada.' });
+            }
+            const monthStr = String(req.body?.month ?? '').trim();
+            const monthStart = monthStr ? monthStartFromYYYYMM(monthStr) : null;
+            if (!monthStart)
+                return res.status(400).json({ message: 'month inválido. Use YYYY-MM (ex: 2026-06).' });
+            const monthEndInclusive = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0);
+            const toIso = (d) => d.toISOString().slice(0, 10);
+            const { spend } = await tiktokAdsApi.getAdvertiserSpend(integration.accessToken, integration.advertiserId, toIso(monthStart), toIso(monthEndInclusive));
+            const prismaAny = prisma;
+            const row = await prismaAny.adSpend.upsert({
+                where: { month_channel: { month: monthStart, channel: 'tiktok' } },
+                update: { amount: spend, notes: 'Sincronizado automaticamente via TikTok Ads API' },
+                create: { month: monthStart, channel: 'tiktok', amount: spend, notes: 'Sincronizado automaticamente via TikTok Ads API' },
+            });
+            await prismaAny.tiktokAdsIntegration.update({
+                where: { id: integration.id },
+                data: { lastSyncAt: new Date() },
+            });
+            return res.json({ success: true, month: monthStr, spend, adSpend: row });
+        }
+        catch (e) {
+            console.error('TikTok Ads sync error:', e);
+            return res.status(500).json({ message: e.message || 'Erro ao sincronizar custo de ADS TikTok.' });
+        }
+    });
+    app.post('/api/tiktok-ads/disconnect', async (_req, res) => {
+        try {
+            const integration = await prisma.tiktokAdsIntegration.findFirst({ orderBy: { id: 'desc' } });
+            if (integration) {
+                await prisma.tiktokAdsIntegration.update({
+                    where: { id: integration.id },
+                    data: { accessToken: null, advertiserId: null, advertiserName: null, status: 'disconnected' },
+                });
+            }
+            return res.json({ success: true });
+        }
+        catch (e) {
+            console.error(e);
+            return res.status(500).json({ message: 'Erro ao desconectar TikTok Ads.' });
         }
     });
     // Itens Shopee duplicados no mesmo pedido (planilha pai + variação / códigos hierárquicos) — impacta custo e P&L

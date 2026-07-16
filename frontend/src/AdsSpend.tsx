@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+﻿import React, { useEffect, useMemo, useState } from "react";
 
 import { API_URL } from './config';
 
@@ -409,7 +409,7 @@ export default function AdsSpend() {
               <input
                 value={channel}
                 onChange={(e) => setChannel(e.target.value)}
-                placeholder="meta | google | shopee | tiktok | tray_atacado | tray_varejo"
+                placeholder="meta | google | shopee | tiktok | atacado | tray_varejo"
                 className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
               />
             </div>

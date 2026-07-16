@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 
 import { API_URL } from './config';
 
@@ -32,7 +32,7 @@ export default function PaymentTypeFees() {
   const [paymentType, setPaymentType] = useState<string>("");
   const [customPaymentType, setCustomPaymentType] = useState<string>("");
   const [percent, setPercent] = useState<string>("");
-  const [feeChannel, setFeeChannel] = useState<string>("tray_atacado");
+  const [feeChannel, setFeeChannel] = useState<string>("atacado");
 
   async function fetchRows() {
     setLoading(true);
@@ -130,7 +130,7 @@ export default function PaymentTypeFees() {
                 onChange={(e) => setFeeChannel(e.target.value)}
                 className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
               >
-                <option value="tray_atacado">Tray Atacado</option>
+                <option value="atacado">Atacado</option>
                 <option value="tray_varejo">Tray Varejo</option>
                 <option value="tray">Tray (fallback)</option>
               </select>
@@ -197,7 +197,7 @@ export default function PaymentTypeFees() {
           <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
             <h3 className="text-sm font-extrabold tracking-wide text-slate-900">
               Taxas cadastradas — {month} —{" "}
-              {feeChannel === "tray_atacado" ? "Atacado" : feeChannel === "tray_varejo" ? "Varejo" : "Tray"}
+              {feeChannel === "atacado" ? "Atacado" : feeChannel === "tray_varejo" ? "Varejo" : "Tray"}
             </h3>
           </div>
           <div className="p-6">

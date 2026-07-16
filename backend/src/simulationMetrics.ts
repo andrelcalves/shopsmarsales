@@ -5,7 +5,7 @@ import { Prisma } from '@prisma/client';
 import { resolveCombinedCost } from './masterProductCost.js';
 import { loadCombinedCostLookup } from './masterProductRoutes.js';
 
-export const TRAY_SOURCE_ATACADO = 'tray_atacado';
+export const TRAY_SOURCE_ATACADO = 'atacado';
 export const TRAY_SOURCE_VAREJO = 'tray_varejo';
 const TRAY_ORDER_SOURCES_LIST = [TRAY_SOURCE_ATACADO, TRAY_SOURCE_VAREJO, 'tray'] as const;
 
@@ -27,7 +27,7 @@ const ORDER_STATUS_EXCLUDED: Prisma.OrderWhereInput[] = [
 
 function isTrayOrderSource(source: string): boolean {
   const s = String(source || '').toLowerCase();
-  return s === 'tray' || s === TRAY_SOURCE_ATACADO || s === TRAY_SOURCE_VAREJO;
+  return s === 'tray' || s === TRAY_SOURCE_ATACADO || s === 'tray_atacado' || s === TRAY_SOURCE_VAREJO;
 }
 
 function resolveTraySubSource(orderId: string): string {
@@ -103,6 +103,8 @@ export function buildSimulationOrderWhere(monthStart: Date, channelRaw: string):
   return orderWhere;
 }
 
+export const DEFAULT_TAX_PERCENT = 5;
+
 export type SimulationMetrics = {
   month: string;
   channel: string;
@@ -122,12 +124,28 @@ export type SimulationMetrics = {
   custoFixo: number;
   custoFixoPercent: number;
   imposto: number;
+  /** Alíquota configurada do mês (%). */
+  taxPercent: number;
+  /** Mesmo valor que taxPercent (compatível com consumidores existentes). */
   impostoPercent: number;
   margemContribuicao: number;
   margemContribuicaoPercent: number;
   lucroLiquido: number;
   margemLucro: number;
 };
+
+export async function getTaxPercentForMonth(prisma: any, monthStr: string): Promise<number> {
+  const monthStart = monthStartFromYYYYMM(monthStr);
+  if (!monthStart) return DEFAULT_TAX_PERCENT;
+  try {
+    const row = await prisma.simulationTaxSetting?.findUnique?.({ where: { month: monthStart } });
+    const v = row?.taxPercent;
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v;
+  } catch {
+    // Model pode ainda não existir antes da migrate.
+  }
+  return DEFAULT_TAX_PERCENT;
+}
 
 export function taxasForChannel(m: SimulationMetrics, channel: string): number {
   const ch = String(channel || '').toLowerCase();
@@ -143,10 +161,15 @@ export async function computeSimulationMetrics(
   prisma: any,
   monthStr: string,
   channel: string,
-  taxPercent = 5,
+  taxPercent?: number,
 ): Promise<SimulationMetrics | null> {
   const monthStart = monthStartFromYYYYMM(monthStr);
   if (!monthStart) return null;
+
+  const resolvedTaxPercent =
+    taxPercent != null && Number.isFinite(taxPercent) && taxPercent >= 0
+      ? taxPercent
+      : await getTaxPercentForMonth(prisma, monthStr);
 
   const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
   const orderWhere = buildSimulationOrderWhere(monthStart, channel);
@@ -292,7 +315,7 @@ export async function computeSimulationMetrics(
   const fixedCostProportional =
     totalRevenueAll > 0 && channel !== 'all' ? fixedCost * (totalRevenue / totalRevenueAll) : fixedCost;
 
-  const tax = totalRevenue * (taxPercent / 100);
+  const tax = totalRevenue * (resolvedTaxPercent / 100);
   const variableCosts = adsSpend + shopeeFees + tiktokFees + cardPix + freight + productionCost + tax;
   const contributionMargin = totalRevenue - variableCosts;
   const contributionMarginPercent = totalRevenue > 0 ? (contributionMargin / totalRevenue) * 100 : 0;
@@ -320,7 +343,8 @@ export async function computeSimulationMetrics(
     custoFixo: Number(fixedCostProportional.toFixed(2)),
     custoFixoPercent: pct(fixedCostProportional),
     imposto: Number(tax.toFixed(2)),
-    impostoPercent: taxPercent,
+    taxPercent: resolvedTaxPercent,
+    impostoPercent: resolvedTaxPercent,
     margemContribuicao: Number(contributionMargin.toFixed(2)),
     margemContribuicaoPercent: Number(contributionMarginPercent.toFixed(2)),
     lucroLiquido: Number(profit.toFixed(2)),
@@ -420,7 +444,8 @@ function pctOfBase(base: number, amount: number): number {
 export function channelKeyForOrder(source: string, orderId: string): string {
   const s = String(source || '').trim().toLowerCase();
   if (s === 'shopee' || s === 'tiktok') return s;
-  if (s === TRAY_SOURCE_ATACADO || s === TRAY_SOURCE_VAREJO) return s;
+  if (s === TRAY_SOURCE_ATACADO || s === 'tray_atacado') return TRAY_SOURCE_ATACADO;
+  if (s === TRAY_SOURCE_VAREJO) return s;
   if (s === 'tray') return resolveTraySubSource(orderId);
   return s;
 }
@@ -428,17 +453,16 @@ export function channelKeyForOrder(source: string, orderId: string): string {
 export async function buildMonthChannelRateMap(
   prisma: any,
   months: string[],
-  taxPercent = 5,
 ): Promise<Map<string, MonthChannelRates>> {
   const map = new Map<string, MonthChannelRates>();
   for (const month of months) {
     for (const ch of CONTRIBUTION_DASHBOARD_CHANNELS) {
-      const m = await computeSimulationMetrics(prisma, month, ch, taxPercent);
+      const m = await computeSimulationMetrics(prisma, month, ch);
       if (!m) continue;
       map.set(`${month}|${ch}`, {
         adsPercent: m.adsPercent,
         fixedPercent: m.custoFixoPercent,
-        taxPercent: m.impostoPercent,
+        taxPercent: m.taxPercent,
       });
     }
   }
@@ -466,7 +490,7 @@ export function computeOrderProfitBreakdown(input: {
   const rates = input.rateMap.get(`${month}|${ch}`) ?? {
     adsPercent: 0,
     fixedPercent: 0,
-    taxPercent: 5,
+    taxPercent: DEFAULT_TAX_PERCENT,
   };
 
   const orderDate = new Date(input.orderDate);

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+﻿import React, { useCallback, useEffect, useState } from "react";
 import { Check, Loader2, Search, X } from "lucide-react";
 
 import { API_URL } from "./config";
@@ -52,7 +52,7 @@ const channelLabel: Record<string, string> = {
   shopee: "Shopee",
   tiktok: "TikTok",
   tray: "Tray (todos)",
-  tray_atacado: "Tray Atacado",
+  atacado: "Atacado",
   tray_varejo: "Tray Varejo",
 };
 
@@ -60,7 +60,7 @@ const sourceBadge: Record<string, string> = {
   shopee: "bg-orange-100 text-orange-800",
   tiktok: "bg-slate-800 text-white",
   tray: "bg-blue-100 text-blue-800",
-  tray_atacado: "bg-sky-900 text-white",
+  atacado: "bg-sky-900 text-white",
   tray_varejo: "bg-sky-400 text-slate-900",
 };
 
@@ -230,7 +230,7 @@ export default function Orders() {
                 <option value="shopee">Shopee</option>
                 <option value="tiktok">TikTok</option>
                 <option value="tray">Tray (todos)</option>
-                <option value="tray_atacado">Tray Atacado</option>
+                <option value="atacado">Atacado</option>
                 <option value="tray_varejo">Tray Varejo</option>
               </select>
             </div>

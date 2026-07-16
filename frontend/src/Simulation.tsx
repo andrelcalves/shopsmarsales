@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 
 import { API_URL } from './config';
 
@@ -22,6 +22,8 @@ type SimulationData = {
   custoFixoPercent: number;
   imposto: number;
   impostoPercent: number;
+  /** Alíquota configurada do mês (%). Default 5. */
+  taxPercent: number;
   margemContribuicao: number;
   margemContribuicaoPercent: number;
   lucroLiquido: number;
@@ -68,6 +70,24 @@ type ProductionCostDetail = {
   lines: ProductionCostLine[];
   totalQuantity: number;
   totalCost: number;
+};
+
+type FreightOrderRow = {
+  orderId: string;
+  source: string;
+  orderDate: string;
+  productName: string;
+  totalPrice: number;
+  status: string;
+  freight: number;
+  freightManual: boolean;
+};
+
+type FreightDetail = {
+  month: string;
+  channel: string;
+  totalFreight: number;
+  orders: FreightOrderRow[];
 };
 
 export type GrossRevenueNavParams = {
@@ -131,7 +151,7 @@ const channelLabel: Record<string, string> = {
   shopee: "Shopee",
   tiktok: "TikTok",
   tray: "Site Tray (atacado + varejo)",
-  tray_atacado: "Tray Atacado",
+  atacado: "Atacado",
   tray_varejo: "Tray Varejo",
 };
 
@@ -140,10 +160,13 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
-  const [detailKind, setDetailKind] = useState<null | "custo">(null);
+  const [detailKind, setDetailKind] = useState<null | "custo" | "frete">(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [custoDetail, setCustoDetail] = useState<ProductionCostDetail | null>(null);
+  const [freteDetail, setFreteDetail] = useState<FreightDetail | null>(null);
+  const [freightDrafts, setFreightDrafts] = useState<Record<string, string>>({});
+  const [freightSavingKey, setFreightSavingKey] = useState<string | null>(null);
   const [costGroupBy, setCostGroupBy] = useState<CostGroupBy>("master");
 
   const now = new Date();
@@ -162,6 +185,10 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
     custoFixo: true,
     imposto: true,
   });
+
+  const [taxInput, setTaxInput] = useState("5");
+  const [taxSaving, setTaxSaving] = useState(false);
+  const [taxMessage, setTaxMessage] = useState("");
 
   function toggleInclude(key: SimulationItemKey) {
     setInclude((s) => ({ ...s, [key]: !s[key] }));
@@ -214,6 +241,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
       custoFixoPercent: pct(custoFixo),
       imposto,
       impostoPercent: pct(imposto),
+      taxPercent: Number(d.taxPercent ?? d.impostoPercent ?? 5),
       margemContribuicao,
       margemContribuicaoPercent,
       lucroLiquido,
@@ -243,6 +271,8 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
 
       if (results.length === 1) {
         setBaseData(results[0]);
+        setTaxInput(String(results[0].taxPercent ?? results[0].impostoPercent ?? 5));
+        setTaxMessage("");
       } else {
         const sum = <K extends keyof SimulationData>(key: K) => results.reduce((acc, r) => acc + Number(r[key] || 0), 0);
         const faturamentoBruto = sum("faturamentoBruto");
@@ -291,11 +321,14 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
           custoFixoPercent: pct(custoFixo),
           imposto,
           impostoPercent: pct(imposto),
+          taxPercent: Number(results[0]?.taxPercent ?? 5),
           margemContribuicao,
           margemContribuicaoPercent,
           lucroLiquido,
           margemLucro,
         });
+        setTaxInput("");
+        setTaxMessage("");
       }
     } catch (e: any) {
       console.error(e);
@@ -311,11 +344,43 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startMonth, endMonth, channel]);
 
+  async function saveTaxPercent() {
+    if (isMultiMonth) {
+      setTaxMessage("Selecione um único mês para alterar o imposto.");
+      return;
+    }
+    const parsed = Number(String(taxInput).replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+      setTaxMessage("Informe um percentual entre 0 e 100.");
+      return;
+    }
+    setTaxSaving(true);
+    setTaxMessage("");
+    try {
+      const res = await fetch(`${API_URL}/api/simulation/tax`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ month: monthRange.start, taxPercent: parsed }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || "Falha ao salvar imposto.");
+      setTaxInput(String(json.taxPercent ?? parsed));
+      setTaxMessage("Alíquota salva para o mês.");
+      await fetchData();
+    } catch (e: any) {
+      setTaxMessage(`Erro: ${e.message}`);
+    } finally {
+      setTaxSaving(false);
+    }
+  }
+
   function closeDetailModal() {
-    if (detailLoading) return;
+    if (detailLoading || freightSavingKey) return;
     setDetailKind(null);
     setDetailError("");
     setCustoDetail(null);
+    setFreteDetail(null);
+    setFreightDrafts({});
   }
 
   function openGrossRevenueScreen() {
@@ -325,6 +390,82 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
       endMonth: monthRange.end,
       channel,
     });
+  }
+
+  function freightRowKey(o: { orderId: string; source: string }) {
+    return `${o.orderId}|${o.source}`;
+  }
+
+  async function loadFreteDetail() {
+    setDetailLoading(true);
+    setDetailError("");
+    setFreteDetail(null);
+    try {
+      const qs = new URLSearchParams();
+      qs.set("month", startMonth);
+      qs.set("channel", channel);
+      const res = await fetch(`${API_URL}/api/simulation/freight?${qs.toString()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || "Falha ao carregar frete.");
+      const detail = json as FreightDetail;
+      setFreteDetail(detail);
+      const drafts: Record<string, string> = {};
+      for (const o of detail.orders) {
+        drafts[freightRowKey(o)] = String(o.freight ?? 0);
+      }
+      setFreightDrafts(drafts);
+    } catch (e: any) {
+      setDetailError(e.message || "Erro ao carregar.");
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function openFreteDetail() {
+    if (isMultiMonth) return;
+    setDetailKind("frete");
+    await loadFreteDetail();
+  }
+
+  async function saveOrderFreight(order: FreightOrderRow) {
+    const key = freightRowKey(order);
+    const raw = freightDrafts[key];
+    const parsed = Number(String(raw ?? "").replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setDetailError("Informe um frete válido (>= 0).");
+      return;
+    }
+    setFreightSavingKey(key);
+    setDetailError("");
+    try {
+      const res = await fetch(
+        `${API_URL}/api/orders/${encodeURIComponent(order.orderId)}/${encodeURIComponent(order.source)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ freight: Number(parsed.toFixed(2)) }),
+        },
+      );
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || "Falha ao salvar frete.");
+      const nextFreight = Number(json.freight ?? parsed);
+      setFreteDetail((prev) => {
+        if (!prev) return prev;
+        const orders = prev.orders.map((o) =>
+          o.orderId === order.orderId && o.source === order.source
+            ? { ...o, freight: nextFreight, freightManual: true }
+            : o,
+        );
+        const totalFreight = Math.round(orders.reduce((s, o) => s + Number(o.freight || 0), 0) * 100) / 100;
+        return { ...prev, orders, totalFreight };
+      });
+      setFreightDrafts((d) => ({ ...d, [key]: String(nextFreight) }));
+      await fetchData();
+    } catch (e: any) {
+      setDetailError(e.message || "Erro ao salvar frete.");
+    } finally {
+      setFreightSavingKey(null);
+    }
   }
 
   async function loadCustoDetail(groupBy: CostGroupBy) {
@@ -407,7 +548,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                   <option value="shopee">Shopee</option>
                   <option value="tiktok">TikTok</option>
                   <option value="tray">Tray (todos)</option>
-                  <option value="tray_atacado">Tray Atacado</option>
+                  <option value="atacado">Atacado</option>
                   <option value="tray_varejo">Tray Varejo</option>
                 </select>
               </div>
@@ -437,7 +578,7 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
             </div>
             {isMultiMonth ? (
               <div className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                Detalhe de custo de produção disponível apenas para 1 mês.
+                Detalhes de custo de produção e frete disponíveis apenas para 1 mês.
               </div>
             ) : null}
           </div>
@@ -459,12 +600,12 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
             >
               <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 bg-slate-50">
                 <h3 id="sim-detail-title" className="text-sm font-extrabold text-slate-900">
-                  Custo de produção — detalhe
+                  {detailKind === "frete" ? "Frete — pedidos" : "Custo de produção — detalhe"}
                 </h3>
                 <button
                   type="button"
                   onClick={closeDetailModal}
-                  disabled={detailLoading}
+                  disabled={detailLoading || Boolean(freightSavingKey)}
                   className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-extrabold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
                 >
                   Fechar
@@ -472,8 +613,97 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
               </div>
               <div className="flex-1 overflow-y-auto p-5">
                 {detailLoading && <p className="text-sm text-slate-600">Carregando...</p>}
-                {detailError && <p className="text-sm font-semibold text-red-600">{detailError}</p>}
-                {!detailLoading && !detailError && detailKind === "custo" && custoDetail && (
+                {detailError && <p className="mb-3 text-sm font-semibold text-red-600">{detailError}</p>}
+                {!detailLoading && detailKind === "frete" && freteDetail && (
+                  <div className="space-y-4">
+                    <p className="text-xs text-slate-500">
+                      {freteDetail.month} — {channelLabel[freteDetail.channel] || freteDetail.channel}. Valores
+                      salvos aqui não são alterados em reimportações.
+                    </p>
+                    <div className="overflow-auto rounded-xl border border-slate-200">
+                      <table className="w-full min-w-[640px] text-sm">
+                        <thead className="sticky top-0 bg-slate-100 text-left text-xs font-extrabold uppercase tracking-wider text-slate-600">
+                          <tr>
+                            <th className="px-3 py-2">Pedido</th>
+                            <th className="px-3 py-2">Data</th>
+                            <th className="px-3 py-2">Canal</th>
+                            <th className="px-3 py-2">Produto</th>
+                            <th className="px-3 py-2 text-right">Total</th>
+                            <th className="px-3 py-2 text-right">Frete</th>
+                            <th className="px-3 py-2" />
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {freteDetail.orders.map((o) => {
+                            const key = freightRowKey(o);
+                            const saving = freightSavingKey === key;
+                            return (
+                              <tr key={key} className="hover:bg-slate-50/80">
+                                <td className="px-3 py-2 font-mono text-xs font-extrabold text-slate-900">
+                                  {o.orderId}
+                                  {o.freightManual ? (
+                                    <span className="mt-0.5 block text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                                      Manual
+                                    </span>
+                                  ) : null}
+                                </td>
+                                <td className="px-3 py-2 text-slate-700 tabular-nums">{o.orderDate}</td>
+                                <td className="px-3 py-2 text-slate-700">
+                                  {channelLabel[o.source] || o.source}
+                                </td>
+                                <td className="px-3 py-2 text-slate-800">
+                                  <span className="line-clamp-2 font-semibold">{o.productName}</span>
+                                  {o.status ? (
+                                    <span className="block text-xs font-normal text-slate-500">{o.status}</span>
+                                  ) : null}
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(o.totalPrice)}</td>
+                                <td className="px-3 py-2 text-right">
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    step={0.01}
+                                    value={freightDrafts[key] ?? ""}
+                                    disabled={saving}
+                                    onChange={(e) =>
+                                      setFreightDrafts((d) => ({ ...d, [key]: e.target.value }))
+                                    }
+                                    className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1 text-right text-xs font-semibold text-slate-800 disabled:bg-slate-100"
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <button
+                                    type="button"
+                                    disabled={saving || detailLoading}
+                                    onClick={() => saveOrderFreight(o)}
+                                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-extrabold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                                  >
+                                    {saving ? "..." : "Salvar"}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {freteDetail.orders.length === 0 && (
+                            <tr>
+                              <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
+                                Nenhum pedido Tray/Atacado com frete no período.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="rounded-xl bg-slate-100 px-4 py-3 text-sm">
+                      <span className="text-slate-500">Frete total: </span>
+                      <span className="font-extrabold text-slate-900">{fmtMoney(freteDetail.totalFreight)}</span>
+                      <span className="ml-3 text-xs text-slate-500">
+                        {freteDetail.orders.length} pedido(s)
+                      </span>
+                    </div>
+                  </div>
+                )}
+                {!detailLoading && detailKind === "custo" && custoDetail && (
                   <div className="space-y-4">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <p className="text-xs text-slate-500">
@@ -677,16 +907,24 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                     <td className="py-2 text-right text-slate-500">{data.taxasCartaoPixPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">
-                      <label className="inline-flex items-center gap-2 select-none">
-                        <input
-                          type="checkbox"
-                          checked={include.frete}
-                          onChange={() => toggleInclude("frete")}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        <span>(-) Frete</span>
-                      </label>
+                    <td className="py-2 pr-4">
+                      <button
+                        type="button"
+                        onClick={openFreteDetail}
+                        disabled={isMultiMonth}
+                        className="text-left text-slate-700 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-600 disabled:no-underline"
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={include.frete}
+                            onChange={() => toggleInclude("frete")}
+                            className="h-4 w-4 rounded border-slate-300"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <span>(-) Frete</span>
+                        </span>
+                      </button>
                     </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.frete)}</td>
                     <td className="py-2 text-right text-slate-500">{data.fretePercent.toFixed(2)}%</td>
@@ -716,15 +954,56 @@ export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX
                   </tr>
                   <tr className="border-b border-slate-100">
                     <td className="py-2 pr-4 text-slate-700">
-                      <label className="inline-flex items-center gap-2 select-none">
-                        <input
-                          type="checkbox"
-                          checked={include.imposto}
-                          onChange={() => toggleInclude("imposto")}
-                          className="h-4 w-4 rounded border-slate-300"
-                        />
-                        <span>(-) Imposto</span>
-                      </label>
+                      <div className="flex flex-col gap-1.5">
+                        <label className="inline-flex items-center gap-2 select-none">
+                          <input
+                            type="checkbox"
+                            checked={include.imposto}
+                            onChange={() => toggleInclude("imposto")}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                          <span>(-) Imposto</span>
+                        </label>
+                        <div className="ml-6 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] text-slate-500">Alíquota do mês</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={0.01}
+                            value={taxInput}
+                            disabled={isMultiMonth || taxSaving || loading}
+                            onChange={(e) => {
+                              setTaxInput(e.target.value);
+                              setTaxMessage("");
+                            }}
+                            className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-800 disabled:bg-slate-100"
+                            title={isMultiMonth ? "Selecione um único mês para editar" : "Percentual de imposto do mês"}
+                          />
+                          <span className="text-[11px] text-slate-500">%</span>
+                          <button
+                            type="button"
+                            disabled={isMultiMonth || taxSaving || loading}
+                            onClick={saveTaxPercent}
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-extrabold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            {taxSaving ? "Salvando..." : "Salvar"}
+                          </button>
+                          {taxMessage && (
+                            <span
+                              className={cn(
+                                "text-[11px] font-semibold",
+                                taxMessage.startsWith("Erro") ? "text-red-600" : "text-emerald-700",
+                              )}
+                            >
+                              {taxMessage}
+                            </span>
+                          )}
+                          {isMultiMonth && (
+                            <span className="text-[11px] text-slate-400">Edite em um mês único</span>
+                          )}
+                        </div>
+                      </div>
                     </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.imposto)}</td>
                     <td className="py-2 text-right text-slate-500">{data.impostoPercent.toFixed(2)}%</td>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+﻿import React, { useEffect, useMemo, useState } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -38,14 +38,14 @@ type ContributionDashboardData = {
 const CHANNEL_LABELS: Record<string, string> = {
   shopee: "Shopee",
   tiktok: "TikTok",
-  tray_atacado: "Tray Atacado",
+  atacado: "Atacado",
   tray_varejo: "Tray Varejo",
 };
 
 const CHANNEL_COLORS: Record<string, string> = {
   shopee: "#ee4d2d",
   tiktok: "#111827",
-  tray_atacado: "#2563eb",
+  atacado: "#2563eb",
   tray_varejo: "#7c3aed",
 };
 
@@ -120,7 +120,7 @@ export default function ContributionDashboard(): JSX.Element {
   const [selectedChannels, setSelectedChannels] = useState<string[]>([
     "shopee",
     "tiktok",
-    "tray_atacado",
+    "atacado",
     "tray_varejo",
   ]);
   const [chartMonth, setChartMonth] = useState<string>("");
@@ -155,7 +155,7 @@ export default function ContributionDashboard(): JSX.Element {
   }, []);
 
   const activeChannels = useMemo(() => {
-    const all = data?.channels || ["shopee", "tiktok", "tray_atacado", "tray_varejo"];
+    const all = data?.channels || ["shopee", "tiktok", "atacado", "tray_varejo"];
     return all.filter((ch) => selectedChannels.includes(ch));
   }, [data, selectedChannels]);
 

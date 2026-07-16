@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+﻿import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -83,7 +83,7 @@ const CHANNEL_COLORS: Record<ChannelId, string> = {
 const CHANNEL_LABELS: Record<ChannelId, string> = {
   shopee: "Shopee",
   tiktok: "TikTok",
-  trayAtacado: "Tray Atacado",
+  trayAtacado: "Atacado",
   trayVarejo: "Tray Varejo",
 };
 
@@ -893,7 +893,7 @@ export default function SalesByDayDashboard() {
                     {selectedChannels.has("trayAtacado") && (
                       <Bar
                         dataKey="trayAtacado"
-                        name="Tray Atacado"
+                        name="Atacado"
                         stackId={singleChannelMode ? undefined : "a"}
                         fill={CHANNEL_COLORS.trayAtacado}
                         radius={[0, 0, 0, 0]}

@@ -1,4 +1,4 @@
-// frontend/src/App.tsx
+﻿// frontend/src/App.tsx
 import React, { useState, FormEvent, useEffect } from 'react';
 import './App.css';
 import Dashboard from './Dashboard';
@@ -46,7 +46,7 @@ interface Sale {
   source: string;
 }
 
-type OrderUploadSource = 'shopee' | 'tiktok' | 'tray' | 'tray_atacado' | 'tray_varejo';
+type OrderUploadSource = 'shopee' | 'tiktok' | 'tray' | 'atacado' | 'tray_varejo';
 
 function App() {
   // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
@@ -58,7 +58,7 @@ function App() {
   const [source, setSource] = useState<OrderUploadSource>('shopee');
   const [message, setMessage] = useState('');
   const [itemsFile, setItemsFile] = useState<File | null>(null);
-  const [itemsTraySource, setItemsTraySource] = useState<'tray' | 'tray_atacado' | 'tray_varejo'>('tray_atacado');
+  const [itemsTraySource, setItemsTraySource] = useState<'tray' | 'atacado' | 'tray_varejo'>('atacado');
   const [itemsMessage, setItemsMessage] = useState('');
   const [tiktokIncomeFile, setTiktokIncomeFile] = useState<File | null>(null);
   const [tiktokIncomeMessage, setTiktokIncomeMessage] = useState('');
@@ -634,10 +634,15 @@ function App() {
                 >
                   <option value="shopee">Shopee</option>
                   <option value="tiktok">TikTok Shop</option>
-                  <option value="tray_atacado">Tray Atacado</option>
+                  <option value="atacado">Atacado (Nuvemshop — pedidos + itens)</option>
                   <option value="tray_varejo">Tray Varejo</option>
-                  <option value="tray">Tray — detectar pelo arquivo (prefixo 5/2 ou loja)</option>
+                  <option value="tray">Tray legado — detectar pelo arquivo (prefixo 5/2 ou loja)</option>
                 </select>
+                {source === 'atacado' ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Use o CSV de Vendas da Nuvemshop (ex.: Vendas-….csv). Pedidos e itens entram no mesmo arquivo.
+                  </p>
+                ) : null}
               </div>
 
               <div className="md:col-span-5">
@@ -676,7 +681,10 @@ function App() {
           {/* Card: Upload Produtos (Tray) */}
           <div className={cn(UI.card, 'p-6')}>
             <div>
-              <h2 className="text-lg font-black tracking-tight text-slate-900">Importar produtos (Tray)</h2>
+              <h2 className="text-lg font-black tracking-tight text-slate-900">Importar produtos (Tray / itens)</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Planilha de itens Tray. Para Atacado (Nuvemshop), os itens já vêm no upload de vendas acima.
+              </p>
               <p className="mt-1 text-sm text-slate-500">
                 Escolha a loja acima e use o arquivo <span className="font-bold">produtos_vendidos_*.csv</span>. Deve ser o mesmo subcanal dos pedidos já importados.
               </p>
@@ -687,10 +695,10 @@ function App() {
                 <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Loja Tray</label>
                 <select
                   value={itemsTraySource}
-                  onChange={(e) => setItemsTraySource(e.target.value as 'tray' | 'tray_atacado' | 'tray_varejo')}
+                  onChange={(e) => setItemsTraySource(e.target.value as 'tray' | 'atacado' | 'tray_varejo')}
                   className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                 >
-                  <option value="tray_atacado">Tray Atacado</option>
+                  <option value="atacado">Atacado</option>
                   <option value="tray_varejo">Tray Varejo</option>
                   <option value="tray">Detectar pelo código do pedido</option>
                 </select>

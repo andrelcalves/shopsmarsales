@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+﻿import React, { useEffect, useState, useMemo, useCallback } from "react";
 import {
   Search,
   Link2,
@@ -99,7 +99,7 @@ const SOURCE_BADGE: Record<string, string> = {
   shopee: "bg-orange-600",
   tiktok: "bg-slate-800",
   tray: "bg-indigo-700",
-  tray_atacado: "bg-sky-900",
+  atacado: "bg-sky-900",
   tray_varejo: "bg-sky-500",
 };
 
@@ -307,7 +307,7 @@ export default function Products() {
                     <option value="shopee">Shopee</option>
                     <option value="tiktok">TikTok</option>
                     <option value="tray">Tray</option>
-                    <option value="tray_atacado">Tray Atacado</option>
+                    <option value="atacado">Atacado</option>
                     <option value="tray_varejo">Tray Varejo</option>
                   </select>
                   <div className="flex items-center gap-2">

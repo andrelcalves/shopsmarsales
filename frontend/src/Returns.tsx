@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import { Search, RotateCcw, Trash2, ChevronDown, ChevronUp, PackageX, AlertTriangle } from 'lucide-react';
 
 import { API_URL } from './config';
@@ -56,7 +56,7 @@ const sourceLabel: Record<string, string> = {
   shopee: 'Shopee',
   tiktok: 'TikTok',
   tray: 'Tray',
-  tray_atacado: 'Tray Atacado',
+  atacado: 'Atacado',
   tray_varejo: 'Tray Varejo',
 };
 
@@ -64,7 +64,7 @@ const sourceBadge: Record<string, string> = {
   shopee: 'bg-orange-100 text-orange-700',
   tiktok: 'bg-slate-100 text-slate-800',
   tray: 'bg-blue-100 text-blue-700',
-  tray_atacado: 'bg-sky-900 text-white',
+  atacado: 'bg-sky-900 text-white',
   tray_varejo: 'bg-sky-400 text-slate-900',
 };
 

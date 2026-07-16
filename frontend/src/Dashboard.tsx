@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+﻿import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { API_URL } from './config';
 import {
@@ -270,7 +270,7 @@ export default function DashboardBI() {
               <div className="text-lg font-black">{totals ? formatMoney(totals.tiktok) : "-"}</div>
             </div>
             <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
-              <div className="text-xs text-white/80 font-semibold">Tray Atacado</div>
+              <div className="text-xs text-white/80 font-semibold">Atacado</div>
               <div className="text-lg font-black">{totals ? formatMoney(totals.trayAtacado) : "-"}</div>
             </div>
             <div className="rounded-xl bg-white/10 border border-white/15 px-4 py-3">
@@ -368,7 +368,7 @@ export default function DashboardBI() {
                           : barKey === "tiktok"
                             ? "TikTok"
                             : barKey === "trayAtacado"
-                              ? "Tray Atacado"
+                              ? "Atacado"
                               : "Tray Varejo"
                     }
                     radius={[12, 12, 4, 4]}
@@ -390,7 +390,7 @@ export default function DashboardBI() {
                         Shopee: CHANNEL_COLORS.shopee,
                         TikTok: CHANNEL_COLORS.tiktok,
                         Tray: CHANNEL_COLORS.tray,
-                        "Tray Atacado": CHANNEL_COLORS.trayAtacado,
+                        "Atacado": CHANNEL_COLORS.trayAtacado,
                         "Tray Varejo": CHANNEL_COLORS.trayVarejo,
                       };
                       const color = colorMap[channel.name] ?? PIE_COLORS[idx % PIE_COLORS.length];
@@ -444,7 +444,7 @@ export default function DashboardBI() {
                       const labels: Record<string, string> = {
                         shopee: "Shopee",
                         tiktok: "TikTok",
-                        trayAtacado: "Tray Atacado",
+                        trayAtacado: "Atacado",
                         trayVarejo: "Tray Varejo",
                       };
                       return [formatMoney(Number(value || 0)), labels[String(name)] ?? name];
@@ -474,7 +474,7 @@ export default function DashboardBI() {
                             <span key={ch} className={cn(
                               "inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-extrabold text-white",
                               ch === 'shopee' ? 'bg-orange-600' : ch === 'tiktok' ? 'bg-slate-800' :
-                              ch === 'tray_atacado' ? 'bg-sky-900' : ch === 'tray_varejo' ? 'bg-sky-500' :
+                              ch === 'atacado' ? 'bg-sky-900' : ch === 'tray_varejo' ? 'bg-sky-500' :
                               ch === 'tray' ? 'bg-sky-600' : 'bg-slate-500'
                             )}>{ch}</span>
                           ))}
