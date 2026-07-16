@@ -1,0 +1,31 @@
+{
+  "family": "shopsmarsales-sync",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::720237151416:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::720237151416:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "sync",
+      "image": "amazon/aws-cli:latest",
+      "essential": true,
+      "environment": [
+        {"name": "DATABASE_URL", "value": "postgresql://shopsmarsales_admin:dOj6qjl8NAiK25268vp8@shopsmarsales-db.c658sayumamu.us-east-1.rds.amazonaws.com:5432/shopsmarsales"}
+      ],
+      "entryPoint": ["sh", "-c"],
+      "command": [
+        "yum install -y postgresql15 && aws s3 cp s3://shopsmarsales-frontend-720237151416/sync/local-backup.dump /tmp/local-backup.dump && pg_restore --clean --no-owner --no-acl -d \"$DATABASE_URL\" /tmp/local-backup.dump; echo 'SYNC DONE exit code:' $?"
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/shopsmarsales",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "sync"
+        }
+      }
+    }
+  ]
+}

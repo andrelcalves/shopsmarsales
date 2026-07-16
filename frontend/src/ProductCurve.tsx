@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+﻿import React, { useEffect, useMemo, useState, useCallback } from "react";
 import axios from "axios";
 import {
   ResponsiveContainer,
@@ -33,7 +33,7 @@ const CHANNEL_COLORS: Record<string, string> = {
   shopee: "bg-orange-600",
   tiktok: "bg-slate-800",
   tray: "bg-sky-600",
-  tray_atacado: "bg-sky-900",
+  atacado: "bg-sky-900",
   tray_varejo: "bg-sky-500",
 };
 

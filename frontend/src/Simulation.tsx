@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 
 import { API_URL } from './config';
 
@@ -22,11 +22,25 @@ type SimulationData = {
   custoFixoPercent: number;
   imposto: number;
   impostoPercent: number;
+  /** Alíquota configurada do mês (%). Default 5. */
+  taxPercent: number;
+  margemContribuicao: number;
+  margemContribuicaoPercent: number;
   lucroLiquido: number;
   margemLucro: number;
 };
 
-type ProductionCostLine = {
+type SimulationItemKey =
+  | "adsInvestimento"
+  | "taxasShopee"
+  | "taxasTiktok"
+  | "taxasCartaoPix"
+  | "frete"
+  | "custoProducao"
+  | "custoFixo"
+  | "imposto";
+
+type ProductionCostMemberLine = {
   productId: number | null;
   productCode: string;
   name: string;
@@ -35,38 +49,55 @@ type ProductionCostLine = {
   totalCost: number;
 };
 
+type ProductionCostLine = {
+  productId: number | null;
+  productCode: string;
+  name: string;
+  masterProductId?: number | null;
+  masterSku?: string | null;
+  unitCost: number;
+  quantity: number;
+  totalCost: number;
+  members?: ProductionCostMemberLine[];
+};
+
+type CostGroupBy = "master" | "product";
+
 type ProductionCostDetail = {
   month: string;
   channel: string;
+  groupBy: CostGroupBy;
   lines: ProductionCostLine[];
   totalQuantity: number;
   totalCost: number;
 };
 
-type GrossRevenueItem = {
-  productCode: string;
-  name: string;
-  quantity: number;
-  unitPrice: number;
-  lineTotal: number;
-};
-
-type GrossRevenueOrder = {
+type FreightOrderRow = {
   orderId: string;
   source: string;
   orderDate: string;
+  productName: string;
   totalPrice: number;
-  unitsInOrder: number;
-  items: GrossRevenueItem[];
+  status: string;
+  freight: number;
+  freightManual: boolean;
 };
 
-type GrossRevenueDetail = {
+type FreightDetail = {
   month: string;
   channel: string;
-  orders: GrossRevenueOrder[];
-  totalOrders: number;
-  totalProductUnits: number;
-  faturamentoBruto: number;
+  totalFreight: number;
+  orders: FreightOrderRow[];
+};
+
+export type GrossRevenueNavParams = {
+  startMonth: string;
+  endMonth: string;
+  channel: string;
+};
+
+type SimulationProps = {
+  onOpenGrossRevenue?: (params: GrossRevenueNavParams) => void;
 };
 
 function cn(...classes: Array<string | false | undefined | null>) {
@@ -82,51 +113,226 @@ function fmtMoney(v: number) {
   return Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-function fmtDate(iso: string) {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+function monthToDate(m: string) {
+  const [y, mm] = (m || "").split("-").map((v) => Number(v));
+  if (!y || !mm) return null;
+  const d = new Date(y, mm - 1, 1);
+  if (isNaN(d.getTime())) return null;
+  return d;
+}
+
+function monthStr(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function clampMonthRange(a: string, b: string) {
+  const da = monthToDate(a);
+  const db = monthToDate(b);
+  if (!da || !db) return { start: a, end: b };
+  return da.getTime() <= db.getTime() ? { start: a, end: b } : { start: b, end: a };
+}
+
+function listMonthsInclusive(start: string, end: string) {
+  const ds = monthToDate(start);
+  const de = monthToDate(end);
+  if (!ds || !de) return [start];
+  const out: string[] = [];
+  const cur = new Date(ds.getFullYear(), ds.getMonth(), 1);
+  const last = new Date(de.getFullYear(), de.getMonth(), 1);
+  while (cur.getTime() <= last.getTime()) {
+    out.push(monthStr(cur));
+    cur.setMonth(cur.getMonth() + 1);
+  }
+  return out.length ? out : [start];
 }
 
 const channelLabel: Record<string, string> = {
   all: "Todos os canais",
   shopee: "Shopee",
   tiktok: "TikTok",
-  tray: "Site Tray (atacado + varejo + legado)",
-  tray_atacado: "Tray Atacado",
+  tray: "Site Tray (atacado + varejo)",
+  atacado: "Atacado",
   tray_varejo: "Tray Varejo",
 };
 
-export default function Simulation(): JSX.Element {
-  const [data, setData] = useState<SimulationData | null>(null);
+export default function Simulation({ onOpenGrossRevenue }: SimulationProps): JSX.Element {
+  const [baseData, setBaseData] = useState<SimulationData | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
-  const [detailKind, setDetailKind] = useState<null | "custo" | "faturamento">(null);
+  const [detailKind, setDetailKind] = useState<null | "custo" | "frete">(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [custoDetail, setCustoDetail] = useState<ProductionCostDetail | null>(null);
-  const [fatDetail, setFatDetail] = useState<GrossRevenueDetail | null>(null);
+  const [freteDetail, setFreteDetail] = useState<FreightDetail | null>(null);
+  const [freightDrafts, setFreightDrafts] = useState<Record<string, string>>({});
+  const [freightSavingKey, setFreightSavingKey] = useState<string | null>(null);
+  const [costGroupBy, setCostGroupBy] = useState<CostGroupBy>("master");
 
   const now = new Date();
   const defaultMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const [month, setMonth] = useState(defaultMonth);
+  const [startMonth, setStartMonth] = useState(defaultMonth);
+  const [endMonth, setEndMonth] = useState(defaultMonth);
   const [channel, setChannel] = useState<string>("all");
+
+  const [include, setInclude] = useState<Record<SimulationItemKey, boolean>>({
+    adsInvestimento: true,
+    taxasShopee: true,
+    taxasTiktok: true,
+    taxasCartaoPix: true,
+    frete: true,
+    custoProducao: true,
+    custoFixo: true,
+    imposto: true,
+  });
+
+  const [taxInput, setTaxInput] = useState("5");
+  const [taxSaving, setTaxSaving] = useState(false);
+  const [taxMessage, setTaxMessage] = useState("");
+
+  function toggleInclude(key: SimulationItemKey) {
+    setInclude((s) => ({ ...s, [key]: !s[key] }));
+  }
+
+  function computeViewData(d: SimulationData | null): SimulationData | null {
+    if (!d) return null;
+    const faturamentoBruto = Number(d.faturamentoBruto || 0);
+
+    const adsInvestimento = include.adsInvestimento ? Number(d.adsInvestimento || 0) : 0;
+    const taxasShopee = include.taxasShopee ? Number(d.taxasShopee || 0) : 0;
+    const taxasTiktok = include.taxasTiktok ? Number(d.taxasTiktok || 0) : 0;
+    const taxasCartaoPix = include.taxasCartaoPix ? Number(d.taxasCartaoPix || 0) : 0;
+    const frete = include.frete ? Number(d.frete || 0) : 0;
+    const custoProducao = include.custoProducao ? Number(d.custoProducao || 0) : 0;
+    const custoFixo = include.custoFixo ? Number(d.custoFixo || 0) : 0;
+    const imposto = include.imposto ? Number(d.imposto || 0) : 0;
+
+    const custosVariaveis =
+      adsInvestimento +
+      taxasShopee +
+      taxasTiktok +
+      taxasCartaoPix +
+      frete +
+      custoProducao +
+      imposto;
+    const margemContribuicao = faturamentoBruto - custosVariaveis;
+    const margemContribuicaoPercent =
+      faturamentoBruto > 0 ? (margemContribuicao / faturamentoBruto) * 100 : 0;
+    const lucroLiquido = margemContribuicao - custoFixo;
+    const margemLucro = faturamentoBruto > 0 ? (lucroLiquido / faturamentoBruto) * 100 : 0;
+
+    const pct = (v: number) => (faturamentoBruto > 0 ? (v / faturamentoBruto) * 100 : 0);
+
+    return {
+      ...d,
+      adsInvestimento,
+      adsPercent: pct(adsInvestimento),
+      taxasShopee,
+      taxasShopeePercent: pct(taxasShopee),
+      taxasTiktok,
+      taxasTiktokPercent: pct(taxasTiktok),
+      taxasCartaoPix,
+      taxasCartaoPixPercent: pct(taxasCartaoPix),
+      frete,
+      fretePercent: pct(frete),
+      custoProducao,
+      custoProducaoPercent: pct(custoProducao),
+      custoFixo,
+      custoFixoPercent: pct(custoFixo),
+      imposto,
+      impostoPercent: pct(imposto),
+      taxPercent: Number(d.taxPercent ?? d.impostoPercent ?? 5),
+      margemContribuicao,
+      margemContribuicaoPercent,
+      lucroLiquido,
+      margemLucro,
+    };
+  }
+
+  const data = computeViewData(baseData);
+  const monthRange = clampMonthRange(startMonth, endMonth);
+  const monthsInRange = listMonthsInclusive(monthRange.start, monthRange.end);
+  const isMultiMonth = monthsInRange.length > 1;
 
   async function fetchData() {
     setLoading(true);
     setMessage("");
     try {
-      const qs = new URLSearchParams();
-      qs.set("month", month);
-      qs.set("channel", channel);
-      const res = await fetch(`${API_URL}/api/simulation?${qs.toString()}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || "Falha ao carregar simulação.");
-      setData(json);
+      const results: SimulationData[] = [];
+      for (const m of monthsInRange) {
+        const qs = new URLSearchParams();
+        qs.set("month", m);
+        qs.set("channel", channel);
+        const res = await fetch(`${API_URL}/api/simulation?${qs.toString()}`);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.message || "Falha ao carregar simulação.");
+        results.push(json as SimulationData);
+      }
+
+      if (results.length === 1) {
+        setBaseData(results[0]);
+        setTaxInput(String(results[0].taxPercent ?? results[0].impostoPercent ?? 5));
+        setTaxMessage("");
+      } else {
+        const sum = <K extends keyof SimulationData>(key: K) => results.reduce((acc, r) => acc + Number(r[key] || 0), 0);
+        const faturamentoBruto = sum("faturamentoBruto");
+        const adsInvestimento = sum("adsInvestimento");
+        const taxasShopee = sum("taxasShopee");
+        const taxasTiktok = sum("taxasTiktok");
+        const taxasCartaoPix = sum("taxasCartaoPix");
+        const frete = sum("frete");
+        const custoProducao = sum("custoProducao");
+        const custoFixo = sum("custoFixo");
+        const imposto = sum("imposto");
+
+        const custosVariaveis =
+          adsInvestimento +
+          taxasShopee +
+          taxasTiktok +
+          taxasCartaoPix +
+          frete +
+          custoProducao +
+          imposto;
+        const margemContribuicao = faturamentoBruto - custosVariaveis;
+        const margemContribuicaoPercent =
+          faturamentoBruto > 0 ? (margemContribuicao / faturamentoBruto) * 100 : 0;
+        const lucroLiquido = margemContribuicao - custoFixo;
+        const margemLucro = faturamentoBruto > 0 ? (lucroLiquido / faturamentoBruto) * 100 : 0;
+
+        const pct = (v: number) => (faturamentoBruto > 0 ? (v / faturamentoBruto) * 100 : 0);
+
+        setBaseData({
+          month: `${monthRange.start} → ${monthRange.end}`,
+          channel,
+          faturamentoBruto,
+          adsInvestimento,
+          adsPercent: pct(adsInvestimento),
+          taxasShopee,
+          taxasShopeePercent: pct(taxasShopee),
+          taxasTiktok,
+          taxasTiktokPercent: pct(taxasTiktok),
+          taxasCartaoPix,
+          taxasCartaoPixPercent: pct(taxasCartaoPix),
+          frete,
+          fretePercent: pct(frete),
+          custoProducao,
+          custoProducaoPercent: pct(custoProducao),
+          custoFixo,
+          custoFixoPercent: pct(custoFixo),
+          imposto,
+          impostoPercent: pct(imposto),
+          taxPercent: Number(results[0]?.taxPercent ?? 5),
+          margemContribuicao,
+          margemContribuicaoPercent,
+          lucroLiquido,
+          margemLucro,
+        });
+        setTaxInput("");
+        setTaxMessage("");
+      }
     } catch (e: any) {
       console.error(e);
-      setData(null);
+      setBaseData(null);
       setMessage(`Erro: ${e.message}`);
     } finally {
       setLoading(false);
@@ -136,29 +342,146 @@ export default function Simulation(): JSX.Element {
   useEffect(() => {
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, channel]);
+  }, [startMonth, endMonth, channel]);
+
+  async function saveTaxPercent() {
+    if (isMultiMonth) {
+      setTaxMessage("Selecione um único mês para alterar o imposto.");
+      return;
+    }
+    const parsed = Number(String(taxInput).replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+      setTaxMessage("Informe um percentual entre 0 e 100.");
+      return;
+    }
+    setTaxSaving(true);
+    setTaxMessage("");
+    try {
+      const res = await fetch(`${API_URL}/api/simulation/tax`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ month: monthRange.start, taxPercent: parsed }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || "Falha ao salvar imposto.");
+      setTaxInput(String(json.taxPercent ?? parsed));
+      setTaxMessage("Alíquota salva para o mês.");
+      await fetchData();
+    } catch (e: any) {
+      setTaxMessage(`Erro: ${e.message}`);
+    } finally {
+      setTaxSaving(false);
+    }
+  }
 
   function closeDetailModal() {
-    if (detailLoading) return;
+    if (detailLoading || freightSavingKey) return;
     setDetailKind(null);
     setDetailError("");
     setCustoDetail(null);
-    setFatDetail(null);
+    setFreteDetail(null);
+    setFreightDrafts({});
   }
 
-  async function openCustoDetail() {
-    setDetailKind("custo");
+  function openGrossRevenueScreen() {
+    if (!onOpenGrossRevenue) return;
+    onOpenGrossRevenue({
+      startMonth: monthRange.start,
+      endMonth: monthRange.end,
+      channel,
+    });
+  }
+
+  function freightRowKey(o: { orderId: string; source: string }) {
+    return `${o.orderId}|${o.source}`;
+  }
+
+  async function loadFreteDetail() {
+    setDetailLoading(true);
+    setDetailError("");
+    setFreteDetail(null);
+    try {
+      const qs = new URLSearchParams();
+      qs.set("month", startMonth);
+      qs.set("channel", channel);
+      const res = await fetch(`${API_URL}/api/simulation/freight?${qs.toString()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || "Falha ao carregar frete.");
+      const detail = json as FreightDetail;
+      setFreteDetail(detail);
+      const drafts: Record<string, string> = {};
+      for (const o of detail.orders) {
+        drafts[freightRowKey(o)] = String(o.freight ?? 0);
+      }
+      setFreightDrafts(drafts);
+    } catch (e: any) {
+      setDetailError(e.message || "Erro ao carregar.");
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function openFreteDetail() {
+    if (isMultiMonth) return;
+    setDetailKind("frete");
+    await loadFreteDetail();
+  }
+
+  async function saveOrderFreight(order: FreightOrderRow) {
+    const key = freightRowKey(order);
+    const raw = freightDrafts[key];
+    const parsed = Number(String(raw ?? "").replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setDetailError("Informe um frete válido (>= 0).");
+      return;
+    }
+    setFreightSavingKey(key);
+    setDetailError("");
+    try {
+      const res = await fetch(
+        `${API_URL}/api/orders/${encodeURIComponent(order.orderId)}/${encodeURIComponent(order.source)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ freight: Number(parsed.toFixed(2)) }),
+        },
+      );
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.message || "Falha ao salvar frete.");
+      const nextFreight = Number(json.freight ?? parsed);
+      setFreteDetail((prev) => {
+        if (!prev) return prev;
+        const orders = prev.orders.map((o) =>
+          o.orderId === order.orderId && o.source === order.source
+            ? { ...o, freight: nextFreight, freightManual: true }
+            : o,
+        );
+        const totalFreight = Math.round(orders.reduce((s, o) => s + Number(o.freight || 0), 0) * 100) / 100;
+        return { ...prev, orders, totalFreight };
+      });
+      setFreightDrafts((d) => ({ ...d, [key]: String(nextFreight) }));
+      await fetchData();
+    } catch (e: any) {
+      setDetailError(e.message || "Erro ao salvar frete.");
+    } finally {
+      setFreightSavingKey(null);
+    }
+  }
+
+  async function loadCustoDetail(groupBy: CostGroupBy) {
     setDetailLoading(true);
     setDetailError("");
     setCustoDetail(null);
     try {
       const qs = new URLSearchParams();
-      qs.set("month", month);
+      qs.set("month", startMonth);
       qs.set("channel", channel);
+      qs.set("groupBy", groupBy);
       const res = await fetch(`${API_URL}/api/simulation/production-cost?${qs.toString()}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || "Falha ao carregar custo de produção.");
       setCustoDetail(json as ProductionCostDetail);
+      setCostGroupBy(groupBy);
     } catch (e: any) {
       setDetailError(e.message || "Erro ao carregar.");
     } finally {
@@ -166,24 +489,15 @@ export default function Simulation(): JSX.Element {
     }
   }
 
-  async function openFaturamentoDetail() {
-    setDetailKind("faturamento");
-    setDetailLoading(true);
-    setDetailError("");
-    setFatDetail(null);
-    try {
-      const qs = new URLSearchParams();
-      qs.set("month", month);
-      qs.set("channel", channel);
-      const res = await fetch(`${API_URL}/api/simulation/gross-revenue?${qs.toString()}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || "Falha ao carregar faturamento.");
-      setFatDetail(json as GrossRevenueDetail);
-    } catch (e: any) {
-      setDetailError(e.message || "Erro ao carregar.");
-    } finally {
-      setDetailLoading(false);
-    }
+  async function openCustoDetail() {
+    if (isMultiMonth) return;
+    setDetailKind("custo");
+    await loadCustoDetail(costGroupBy);
+  }
+
+  async function switchCostGroupBy(next: CostGroupBy) {
+    if (next === costGroupBy && custoDetail) return;
+    await loadCustoDetail(next);
   }
 
   if (!data && !loading && !message)
@@ -198,18 +512,26 @@ export default function Simulation(): JSX.Element {
       <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
         <div className={cn(UI.card, "p-6")}>
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:flex-wrap">
-            <div className="flex-1 min-w-0">
-              <h2 className="text-lg font-black tracking-tight text-slate-900">Simulação P&L</h2>
-            </div>
             <div className="flex flex-wrap items-end gap-3">
               <div>
                 <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
-                  Mês
+                  Mês inicial
                 </label>
                 <input
                   type="month"
-                  value={month}
-                  onChange={(e) => setMonth(e.target.value)}
+                  value={startMonth}
+                  onChange={(e) => setStartMonth(e.target.value)}
+                  className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
+                  Mês final
+                </label>
+                <input
+                  type="month"
+                  value={endMonth}
+                  onChange={(e) => setEndMonth(e.target.value)}
                   className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
                 />
               </div>
@@ -226,7 +548,7 @@ export default function Simulation(): JSX.Element {
                   <option value="shopee">Shopee</option>
                   <option value="tiktok">TikTok</option>
                   <option value="tray">Tray (todos)</option>
-                  <option value="tray_atacado">Tray Atacado</option>
+                  <option value="atacado">Atacado</option>
                   <option value="tray_varejo">Tray Varejo</option>
                 </select>
               </div>
@@ -238,6 +560,27 @@ export default function Simulation(): JSX.Element {
                 {loading ? "..." : "Calcular"}
               </button>
             </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs font-semibold text-slate-600">
+              Período:{" "}
+              <span className="font-extrabold text-slate-900">
+                {monthRange.start}
+              </span>{" "}
+              {monthRange.start !== monthRange.end ? (
+                <>
+                  <span className="text-slate-400">→</span>{" "}
+                  <span className="font-extrabold text-slate-900">{monthRange.end}</span>{" "}
+                  <span className="text-slate-400">·</span>{" "}
+                  <span className="font-bold text-slate-700">{monthsInRange.length} meses</span>
+                </>
+              ) : null}
+            </div>
+            {isMultiMonth ? (
+              <div className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                Detalhes de custo de produção e frete disponíveis apenas para 1 mês.
+              </div>
+            ) : null}
           </div>
           {message && <div className="mt-3 text-sm font-semibold text-red-600">{message}</div>}
         </div>
@@ -257,12 +600,12 @@ export default function Simulation(): JSX.Element {
             >
               <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 bg-slate-50">
                 <h3 id="sim-detail-title" className="text-sm font-extrabold text-slate-900">
-                  {detailKind === "custo" ? "Custo de produção — detalhe" : "Faturamento bruto — pedidos"}
+                  {detailKind === "frete" ? "Frete — pedidos" : "Custo de produção — detalhe"}
                 </h3>
                 <button
                   type="button"
                   onClick={closeDetailModal}
-                  disabled={detailLoading}
+                  disabled={detailLoading || Boolean(freightSavingKey)}
                   className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-extrabold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
                 >
                   Fechar
@@ -270,17 +613,143 @@ export default function Simulation(): JSX.Element {
               </div>
               <div className="flex-1 overflow-y-auto p-5">
                 {detailLoading && <p className="text-sm text-slate-600">Carregando...</p>}
-                {detailError && <p className="text-sm font-semibold text-red-600">{detailError}</p>}
-                {!detailLoading && !detailError && detailKind === "custo" && custoDetail && (
+                {detailError && <p className="mb-3 text-sm font-semibold text-red-600">{detailError}</p>}
+                {!detailLoading && detailKind === "frete" && freteDetail && (
                   <div className="space-y-4">
                     <p className="text-xs text-slate-500">
-                      {custoDetail.month} — {channelLabel[custoDetail.channel] || custoDetail.channel}
+                      {freteDetail.month} — {channelLabel[freteDetail.channel] || freteDetail.channel}. Valores
+                      salvos aqui não são alterados em reimportações.
                     </p>
+                    <div className="overflow-auto rounded-xl border border-slate-200">
+                      <table className="w-full min-w-[640px] text-sm">
+                        <thead className="sticky top-0 bg-slate-100 text-left text-xs font-extrabold uppercase tracking-wider text-slate-600">
+                          <tr>
+                            <th className="px-3 py-2">Pedido</th>
+                            <th className="px-3 py-2">Data</th>
+                            <th className="px-3 py-2">Canal</th>
+                            <th className="px-3 py-2">Produto</th>
+                            <th className="px-3 py-2 text-right">Total</th>
+                            <th className="px-3 py-2 text-right">Frete</th>
+                            <th className="px-3 py-2" />
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {freteDetail.orders.map((o) => {
+                            const key = freightRowKey(o);
+                            const saving = freightSavingKey === key;
+                            return (
+                              <tr key={key} className="hover:bg-slate-50/80">
+                                <td className="px-3 py-2 font-mono text-xs font-extrabold text-slate-900">
+                                  {o.orderId}
+                                  {o.freightManual ? (
+                                    <span className="mt-0.5 block text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                                      Manual
+                                    </span>
+                                  ) : null}
+                                </td>
+                                <td className="px-3 py-2 text-slate-700 tabular-nums">{o.orderDate}</td>
+                                <td className="px-3 py-2 text-slate-700">
+                                  {channelLabel[o.source] || o.source}
+                                </td>
+                                <td className="px-3 py-2 text-slate-800">
+                                  <span className="line-clamp-2 font-semibold">{o.productName}</span>
+                                  {o.status ? (
+                                    <span className="block text-xs font-normal text-slate-500">{o.status}</span>
+                                  ) : null}
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(o.totalPrice)}</td>
+                                <td className="px-3 py-2 text-right">
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    step={0.01}
+                                    value={freightDrafts[key] ?? ""}
+                                    disabled={saving}
+                                    onChange={(e) =>
+                                      setFreightDrafts((d) => ({ ...d, [key]: e.target.value }))
+                                    }
+                                    className="w-24 rounded-lg border border-slate-200 bg-white px-2 py-1 text-right text-xs font-semibold text-slate-800 disabled:bg-slate-100"
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <button
+                                    type="button"
+                                    disabled={saving || detailLoading}
+                                    onClick={() => saveOrderFreight(o)}
+                                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-extrabold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                                  >
+                                    {saving ? "..." : "Salvar"}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {freteDetail.orders.length === 0 && (
+                            <tr>
+                              <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
+                                Nenhum pedido Tray/Atacado com frete no período.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="rounded-xl bg-slate-100 px-4 py-3 text-sm">
+                      <span className="text-slate-500">Frete total: </span>
+                      <span className="font-extrabold text-slate-900">{fmtMoney(freteDetail.totalFreight)}</span>
+                      <span className="ml-3 text-xs text-slate-500">
+                        {freteDetail.orders.length} pedido(s)
+                      </span>
+                    </div>
+                  </div>
+                )}
+                {!detailLoading && detailKind === "custo" && custoDetail && (
+                  <div className="space-y-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-xs text-slate-500">
+                        {custoDetail.month} — {channelLabel[custoDetail.channel] || custoDetail.channel}
+                      </p>
+                      <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
+                        <button
+                          type="button"
+                          disabled={detailLoading}
+                          onClick={() => switchCostGroupBy("master")}
+                          className={cn(
+                            "rounded-lg px-3 py-1.5 text-xs font-extrabold transition",
+                            costGroupBy === "master"
+                              ? "bg-slate-900 text-white"
+                              : "text-slate-600 hover:bg-slate-50",
+                          )}
+                        >
+                          Por produto mestre
+                        </button>
+                        <button
+                          type="button"
+                          disabled={detailLoading}
+                          onClick={() => switchCostGroupBy("product")}
+                          className={cn(
+                            "rounded-lg px-3 py-1.5 text-xs font-extrabold transition",
+                            costGroupBy === "product"
+                              ? "bg-slate-900 text-white"
+                              : "text-slate-600 hover:bg-slate-50",
+                          )}
+                        >
+                          Por produto de canal
+                        </button>
+                      </div>
+                    </div>
                     <div className="overflow-auto rounded-xl border border-slate-200">
                       <table className="w-full min-w-[520px] text-sm">
                         <thead className="sticky top-0 bg-slate-100 text-left text-xs font-extrabold uppercase tracking-wider text-slate-600">
                           <tr>
-                            <th className="px-3 py-2">Produto</th>
+                            {costGroupBy === "master" ? (
+                              <>
+                                <th className="px-3 py-2">SKU mestre</th>
+                                <th className="px-3 py-2">Nome canônico</th>
+                              </>
+                            ) : (
+                              <th className="px-3 py-2">Produto</th>
+                            )}
                             <th className="px-3 py-2 text-right">Custo unit.</th>
                             <th className="px-3 py-2 text-right">Qtd</th>
                             <th className="px-3 py-2 text-right">Total</th>
@@ -288,13 +757,36 @@ export default function Simulation(): JSX.Element {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {custoDetail.lines.map((row, idx) => (
-                            <tr key={`${row.productCode}-${row.name}-${idx}`} className="hover:bg-slate-50/80">
-                              <td className="px-3 py-2 text-slate-800">
-                                <span className="font-semibold">{row.name}</span>
-                                {row.productCode ? (
-                                  <span className="block text-xs font-normal text-slate-500">{row.productCode}</span>
-                                ) : null}
-                              </td>
+                            <tr
+                              key={
+                                row.masterProductId != null
+                                  ? `master-${row.masterProductId}`
+                                  : `${row.productCode}-${row.name}-${idx}`
+                              }
+                              className="hover:bg-slate-50/80"
+                            >
+                              {costGroupBy === "master" ? (
+                                <>
+                                  <td className="px-3 py-2 font-mono text-xs font-extrabold text-slate-900">
+                                    {row.masterSku ?? "—"}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-800">
+                                    <span className="font-semibold">{row.name}</span>
+                                    {row.members && row.members.length > 0 ? (
+                                      <span className="block text-xs font-normal text-slate-500">
+                                        {row.members.length} produto(s) de canal
+                                      </span>
+                                    ) : null}
+                                  </td>
+                                </>
+                              ) : (
+                                <td className="px-3 py-2 text-slate-800">
+                                  <span className="font-semibold">{row.name}</span>
+                                  {row.productCode ? (
+                                    <span className="block text-xs font-normal text-slate-500">{row.productCode}</span>
+                                  ) : null}
+                                </td>
+                              )}
                               <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(row.unitCost)}</td>
                               <td className="px-3 py-2 text-right font-semibold tabular-nums">{row.quantity}</td>
                               <td className="px-3 py-2 text-right font-bold tabular-nums">{fmtMoney(row.totalCost)}</td>
@@ -302,7 +794,10 @@ export default function Simulation(): JSX.Element {
                           ))}
                           {custoDetail.lines.length === 0 && (
                             <tr>
-                              <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
+                              <td
+                                colSpan={costGroupBy === "master" ? 5 : 4}
+                                className="px-3 py-6 text-center text-slate-500"
+                              >
                                 Nenhuma linha de pedido no período.
                               </td>
                             </tr>
@@ -318,79 +813,6 @@ export default function Simulation(): JSX.Element {
                       <div>
                         <span className="text-slate-500">Custo total: </span>
                         <span className="font-extrabold text-slate-900">{fmtMoney(custoDetail.totalCost)}</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {!detailLoading && !detailError && detailKind === "faturamento" && fatDetail && (
-                  <div className="space-y-4">
-                    <p className="text-xs text-slate-500">
-                      {fatDetail.month} — {channelLabel[fatDetail.channel] || fatDetail.channel}
-                    </p>
-                    <div className="space-y-4">
-                      {fatDetail.orders.map((o) => (
-                        <div
-                          key={`${o.source}-${o.orderId}`}
-                          className="rounded-xl border border-slate-200 bg-white overflow-hidden"
-                        >
-                          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-slate-100 bg-slate-50/80 px-3 py-2">
-                            <div className="text-sm">
-                              <span className="font-extrabold text-slate-900">Pedido {o.orderId}</span>
-                              <span className="mx-2 text-slate-300">·</span>
-                              <span className="font-semibold text-slate-600">{o.source}</span>
-                              <span className="mx-2 text-slate-300">·</span>
-                              <span className="text-slate-600">{fmtDate(o.orderDate)}</span>
-                            </div>
-                            <div className="text-sm text-right">
-                              <span className="text-slate-500">Valor: </span>
-                              <span className="font-extrabold text-slate-900">{fmtMoney(o.totalPrice)}</span>
-                              <span className="mx-2 text-slate-300">·</span>
-                              <span className="text-slate-500">Unid.: </span>
-                              <span className="font-bold text-slate-800">{o.unitsInOrder}</span>
-                            </div>
-                          </div>
-                          <div className="overflow-x-auto">
-                            <table className="w-full min-w-[400px] text-xs sm:text-sm">
-                              <thead className="bg-slate-50 text-left text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
-                                <tr>
-                                  <th className="px-3 py-2">Produto</th>
-                                  <th className="px-3 py-2 text-right">Qtd</th>
-                                  <th className="px-3 py-2 text-right">Unit.</th>
-                                  <th className="px-3 py-2 text-right">Total linha</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                {o.items.map((it, i) => (
-                                  <tr key={`${it.productCode}-${i}`}>
-                                    <td className="px-3 py-1.5 text-slate-800">{it.name}</td>
-                                    <td className="px-3 py-1.5 text-right font-semibold tabular-nums">{it.quantity}</td>
-                                    <td className="px-3 py-1.5 text-right tabular-nums">{fmtMoney(it.unitPrice)}</td>
-                                    <td className="px-3 py-1.5 text-right font-semibold tabular-nums">
-                                      {fmtMoney(it.lineTotal)}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      ))}
-                      {fatDetail.orders.length === 0 && (
-                        <p className="text-sm text-slate-500 text-center py-8">Nenhum pedido no período.</p>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap gap-6 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3 text-sm">
-                      <div>
-                        <span className="text-emerald-800/80">Pedidos: </span>
-                        <span className="font-extrabold text-emerald-950">{fatDetail.totalOrders}</span>
-                      </div>
-                      <div>
-                        <span className="text-emerald-800/80">Total de unidades (produtos): </span>
-                        <span className="font-extrabold text-emerald-950">{fatDetail.totalProductUnits}</span>
-                      </div>
-                      <div>
-                        <span className="text-emerald-800/80">Faturamento bruto: </span>
-                        <span className="font-extrabold text-emerald-950">{fmtMoney(fatDetail.faturamentoBruto)}</span>
                       </div>
                     </div>
                   </div>
@@ -414,8 +836,9 @@ export default function Simulation(): JSX.Element {
                     <td className="py-2 pr-4">
                       <button
                         type="button"
-                        onClick={openFaturamentoDetail}
-                        className="text-left font-semibold text-slate-900 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-600"
+                        onClick={openGrossRevenueScreen}
+                        disabled={!onOpenGrossRevenue}
+                        className="text-left font-semibold text-slate-900 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-600 disabled:no-underline disabled:text-slate-600 disabled:cursor-default"
                       >
                         Faturamento Bruto
                       </button>
@@ -424,27 +847,85 @@ export default function Simulation(): JSX.Element {
                     <td className="py-2 w-16 text-right text-slate-500">—</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Investimento em Ads</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.adsInvestimento}
+                          onChange={() => toggleInclude("adsInvestimento")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Investimento em Ads</span>
+                      </label>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.adsInvestimento)}</td>
                     <td className="py-2 text-right text-slate-500">{data.adsPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Taxas Shopee</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.taxasShopee}
+                          onChange={() => toggleInclude("taxasShopee")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Taxas Shopee</span>
+                      </label>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.taxasShopee)}</td>
                     <td className="py-2 text-right text-slate-500">{data.taxasShopeePercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Taxas TikTok</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.taxasTiktok}
+                          onChange={() => toggleInclude("taxasTiktok")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Taxas TikTok</span>
+                      </label>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.taxasTiktok)}</td>
                     <td className="py-2 text-right text-slate-500">{data.taxasTiktokPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Taxas Cartão/PIX</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.taxasCartaoPix}
+                          onChange={() => toggleInclude("taxasCartaoPix")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Taxas Cartão/PIX</span>
+                      </label>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.taxasCartaoPix)}</td>
                     <td className="py-2 text-right text-slate-500">{data.taxasCartaoPixPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Frete</td>
+                    <td className="py-2 pr-4">
+                      <button
+                        type="button"
+                        onClick={openFreteDetail}
+                        disabled={isMultiMonth}
+                        className="text-left text-slate-700 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-600 disabled:no-underline"
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={include.frete}
+                            onChange={() => toggleInclude("frete")}
+                            className="h-4 w-4 rounded border-slate-300"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <span>(-) Frete</span>
+                        </span>
+                      </button>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.frete)}</td>
                     <td className="py-2 text-right text-slate-500">{data.fretePercent.toFixed(2)}%</td>
                   </tr>
@@ -453,23 +934,106 @@ export default function Simulation(): JSX.Element {
                       <button
                         type="button"
                         onClick={openCustoDetail}
+                        disabled={isMultiMonth}
                         className="text-left text-slate-700 underline decoration-slate-300 underline-offset-2 hover:decoration-slate-600"
                       >
-                        (-) Custo de Produção
+                        <span className="inline-flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={include.custoProducao}
+                            onChange={() => toggleInclude("custoProducao")}
+                            className="h-4 w-4 rounded border-slate-300"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <span>(-) Custo de Produção</span>
+                        </span>
                       </button>
                     </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.custoProducao)}</td>
                     <td className="py-2 text-right text-slate-500">{data.custoProducaoPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Custo Fixo</td>
-                    <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.custoFixo)}</td>
-                    <td className="py-2 text-right text-slate-500">{data.custoFixoPercent.toFixed(2)}%</td>
-                  </tr>
-                  <tr className="border-b border-slate-100">
-                    <td className="py-2 pr-4 text-slate-700">(-) Imposto ({data.impostoPercent}%)</td>
+                    <td className="py-2 pr-4 text-slate-700">
+                      <div className="flex flex-col gap-1.5">
+                        <label className="inline-flex items-center gap-2 select-none">
+                          <input
+                            type="checkbox"
+                            checked={include.imposto}
+                            onChange={() => toggleInclude("imposto")}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                          <span>(-) Imposto</span>
+                        </label>
+                        <div className="ml-6 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] text-slate-500">Alíquota do mês</span>
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={0.01}
+                            value={taxInput}
+                            disabled={isMultiMonth || taxSaving || loading}
+                            onChange={(e) => {
+                              setTaxInput(e.target.value);
+                              setTaxMessage("");
+                            }}
+                            className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-800 disabled:bg-slate-100"
+                            title={isMultiMonth ? "Selecione um único mês para editar" : "Percentual de imposto do mês"}
+                          />
+                          <span className="text-[11px] text-slate-500">%</span>
+                          <button
+                            type="button"
+                            disabled={isMultiMonth || taxSaving || loading}
+                            onClick={saveTaxPercent}
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-extrabold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            {taxSaving ? "Salvando..." : "Salvar"}
+                          </button>
+                          {taxMessage && (
+                            <span
+                              className={cn(
+                                "text-[11px] font-semibold",
+                                taxMessage.startsWith("Erro") ? "text-red-600" : "text-emerald-700",
+                              )}
+                            >
+                              {taxMessage}
+                            </span>
+                          )}
+                          {isMultiMonth && (
+                            <span className="text-[11px] text-slate-400">Edite em um mês único</span>
+                          )}
+                        </div>
+                      </div>
+                    </td>
                     <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.imposto)}</td>
                     <td className="py-2 text-right text-slate-500">{data.impostoPercent.toFixed(2)}%</td>
+                  </tr>
+                  <tr className="bg-sky-50 border-y border-sky-100">
+                    <td className="py-3 pr-4">
+                      <span className="font-extrabold text-slate-900">(=) Margem de Contribuição</span>
+                      <span className="mt-0.5 block text-[10px] font-medium text-slate-500">
+                        Faturamento menos custos variáveis (antes do custo fixo)
+                      </span>
+                    </td>
+                    <td className="py-3 text-right font-black text-sky-950">{fmtMoney(data.margemContribuicao)}</td>
+                    <td className="py-3 text-right font-extrabold text-sky-800">
+                      {data.margemContribuicaoPercent.toFixed(2)}%
+                    </td>
+                  </tr>
+                  <tr className="border-b border-slate-100">
+                    <td className="py-2 pr-4 text-slate-700">
+                      <label className="inline-flex items-center gap-2 select-none">
+                        <input
+                          type="checkbox"
+                          checked={include.custoFixo}
+                          onChange={() => toggleInclude("custoFixo")}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        <span>(-) Custo Fixo</span>
+                      </label>
+                    </td>
+                    <td className="py-2 text-right font-bold text-slate-900">{fmtMoney(data.custoFixo)}</td>
+                    <td className="py-2 text-right text-slate-500">{data.custoFixoPercent.toFixed(2)}%</td>
                   </tr>
                   <tr className="bg-emerald-50">
                     <td className="py-3 pr-4 font-extrabold text-slate-900">(=) Lucro Líquido Final</td>

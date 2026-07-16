@@ -1,14 +1,11 @@
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+﻿import React, { useEffect, useState, useMemo, useCallback } from "react";
 import {
-  Package,
   Search,
   Link2,
   Unlink,
-  CheckCircle2,
   Loader2,
   Layers,
   Tag,
-  Sparkles,
   Pencil,
 } from "lucide-react";
 
@@ -22,22 +19,13 @@ type Product = {
   variationName: string | null;
   parentCode: string | null;
   costPrice: number | null;
+  effectiveCost?: number | null;
+  effectiveCostDate?: string | null;
+  costSource?: "stock" | "manual" | null;
   source: string;
   _count?: { orderItems: number };
   totalQtySold?: number;
   productGroupItem?: { productGroup: { id: number; name: string } } | null;
-};
-
-type MatchSuggestion = {
-  matchKey: string;
-  products: Array<{
-    id: number;
-    code: string;
-    name: string;
-    source: string;
-    sku: string | null;
-    variationName: string | null;
-  }>;
 };
 
 function cn(...classes: Array<string | false | undefined | null>) {
@@ -54,11 +42,64 @@ function fmtMoney(v: number | null) {
   return Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+function fmtDateBR(iso: string | null | undefined) {
+  if (!iso) return null;
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return iso;
+  return `${d}/${m}/${y}`;
+}
+
+function displayCost(p: Product) {
+  return p.effectiveCost ?? p.costPrice;
+}
+
+function CostCell({
+  p,
+  editingId,
+  editCostPrice,
+  setEditingId,
+  setEditCostPrice,
+  saveCostPrice,
+}: {
+  p: Product;
+  editingId: number | null;
+  editCostPrice: string;
+  setEditingId: (v: number | null) => void;
+  setEditCostPrice: (v: string) => void;
+  saveCostPrice: (id: number, val: string) => void;
+}) {
+  const cost = displayCost(p);
+  const dateLabel = fmtDateBR(p.effectiveCostDate);
+  return (
+    <div>
+      {editingId === p.id ? (
+        <div className="flex items-center gap-1">
+          <input type="text" value={editCostPrice} onChange={(e) => setEditCostPrice(e.target.value)} placeholder="0,00" className="rounded-lg border border-slate-200 px-2 py-1 text-xs w-20" autoFocus onKeyDown={(e) => { if (e.key === "Enter") saveCostPrice(p.id, editCostPrice); if (e.key === "Escape") setEditingId(null); }} />
+          <button onClick={() => saveCostPrice(p.id, editCostPrice)} className="rounded-lg bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white">OK</button>
+        </div>
+      ) : (
+        <button onClick={() => { setEditingId(p.id); setEditCostPrice(cost != null ? String(cost) : ""); }} className="text-xs font-bold text-slate-900 hover:text-sky-600 transition text-left">
+          {fmtMoney(cost)}
+        </button>
+      )}
+      {dateLabel && (
+        <div className="text-[10px] text-slate-500 mt-0.5">desde {dateLabel}</div>
+      )}
+      {p.costSource === "stock" && (
+        <span className="inline-block text-[10px] font-bold text-emerald-700 mt-0.5">Estoque</span>
+      )}
+      {p.costSource === "manual" && (
+        <span className="inline-block text-[10px] font-bold text-slate-500 mt-0.5">Manual</span>
+      )}
+    </div>
+  );
+}
+
 const SOURCE_BADGE: Record<string, string> = {
   shopee: "bg-orange-600",
   tiktok: "bg-slate-800",
   tray: "bg-indigo-700",
-  tray_atacado: "bg-sky-900",
+  atacado: "bg-sky-900",
   tray_varejo: "bg-sky-500",
 };
 
@@ -70,10 +111,9 @@ function SourceBadge({ source }: { source: string }) {
   );
 }
 
-type Tab = "list" | "consolidate";
-
 export default function Products() {
-  const [tab, setTab] = useState<Tab>("list");
+  // Consolidação cross-channel migrou para a tela "Produtos mestre" (SKU mestre + vínculo manual).
+  // Esta tela mantém a listagem por canal para inspeção e edição rápida de custo/SKU.
   const [rows, setRows] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -82,8 +122,6 @@ export default function Products() {
   const [editCostPrice, setEditCostPrice] = useState("");
   const [editSkuId, setEditSkuId] = useState<number | null>(null);
   const [editSku, setEditSku] = useState("");
-  const [suggestions, setSuggestions] = useState<MatchSuggestion[]>([]);
-  const [loadingSugg, setLoadingSugg] = useState(false);
   const [consolidating, setConsolidating] = useState<string | null>(null);
   const [selectedForGroup, setSelectedForGroup] = useState<number[]>([]);
   const [sourceFilter, setSourceFilter] = useState<string>("all");
@@ -104,26 +142,9 @@ export default function Products() {
     }
   }, []);
 
-  const fetchSuggestions = useCallback(async () => {
-    setLoadingSugg(true);
-    try {
-      const res = await fetch(`${API_URL}/api/products/suggest-matches`);
-      const data = await res.json();
-      setSuggestions(Array.isArray(data) ? data : []);
-    } catch {
-      setSuggestions([]);
-    } finally {
-      setLoadingSugg(false);
-    }
-  }, []);
-
   useEffect(() => {
     fetchRows();
   }, [fetchRows]);
-
-  useEffect(() => {
-    if (tab === "consolidate") fetchSuggestions();
-  }, [tab, fetchSuggestions]);
 
   const filteredRows = useMemo(() => {
     let r = rows;
@@ -192,25 +213,6 @@ export default function Products() {
     }
   }
 
-  async function handleConsolidate(matchKey: string, productIds: number[], groupName: string) {
-    setConsolidating(matchKey);
-    try {
-      const res = await fetch(`${API_URL}/api/products/consolidate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productIds, groupName }),
-      });
-      if (!res.ok) throw new Error("Falha ao consolidar.");
-      setMessage("Produtos consolidados!");
-      fetchSuggestions();
-      fetchRows();
-    } catch (err: any) {
-      setMessage(`Erro: ${err.message}`);
-    } finally {
-      setConsolidating(null);
-    }
-  }
-
   async function handleManualGroup() {
     if (selectedForGroup.length < 2) {
       setMessage("Selecione pelo menos 2 produtos para agrupar.");
@@ -231,7 +233,6 @@ export default function Products() {
       setMessage("Produtos agrupados!");
       setSelectedForGroup([]);
       fetchRows();
-      fetchSuggestions();
     } catch (err: any) {
       setMessage(`Erro: ${err.message}`);
     } finally {
@@ -276,28 +277,8 @@ export default function Products() {
   return (
     <div className={cn(UI.bg, "min-h-screen")}>
       <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
-        {/* Tabs */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setTab("list")}
-            className={cn(
-              "px-4 py-2 rounded-xl text-sm font-extrabold transition",
-              tab === "list" ? "bg-slate-900 text-white shadow-sm" : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
-            )}
-          >
-            <Package className="w-4 h-4 inline mr-1.5 -mt-0.5" />
-            Produtos
-          </button>
-          <button
-            onClick={() => setTab("consolidate")}
-            className={cn(
-              "px-4 py-2 rounded-xl text-sm font-extrabold transition",
-              tab === "consolidate" ? "bg-slate-900 text-white shadow-sm" : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
-            )}
-          >
-            <Link2 className="w-4 h-4 inline mr-1.5 -mt-0.5" />
-            Consolidar canais
-          </button>
+        <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-800">
+          A consolidação cross-channel migrou para <strong>Cadastros → Produtos mestre</strong> (SKU mestre + vínculo manual).
         </div>
 
         {message && (
@@ -306,8 +287,7 @@ export default function Products() {
           </div>
         )}
 
-        {tab === "list" && (
-          <>
+        <>
             {/* Filters */}
             <div className={cn(UI.card, "p-6")}>
               <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -326,8 +306,8 @@ export default function Products() {
                     <option value="all">Todos canais</option>
                     <option value="shopee">Shopee</option>
                     <option value="tiktok">TikTok</option>
-                    <option value="tray">Tray (legado)</option>
-                    <option value="tray_atacado">Tray Atacado</option>
+                    <option value="tray">Tray</option>
+                    <option value="atacado">Atacado</option>
                     <option value="tray_varejo">Tray Varejo</option>
                   </select>
                   <div className="flex items-center gap-2">
@@ -506,16 +486,7 @@ export default function Products() {
                                         ) : <span className="text-xs text-slate-300">—</span>}
                                       </td>
                                       <td className="px-4 py-2.5">
-                                        {editingId === vp.id ? (
-                                          <div className="flex items-center gap-1">
-                                            <input type="text" value={editCostPrice} onChange={(e) => setEditCostPrice(e.target.value)} placeholder="0,00" className="rounded-lg border border-slate-200 px-2 py-1 text-xs w-20" autoFocus onKeyDown={(e) => { if (e.key === "Enter") saveCostPrice(vp.id, editCostPrice); if (e.key === "Escape") setEditingId(null); }} />
-                                            <button onClick={() => saveCostPrice(vp.id, editCostPrice)} className="rounded-lg bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white">OK</button>
-                                          </div>
-                                        ) : (
-                                          <button onClick={() => { setEditingId(vp.id); setEditCostPrice(vp.costPrice != null ? String(vp.costPrice) : ""); }} className="text-xs font-bold text-slate-900 hover:text-sky-600 transition">
-                                            {fmtMoney(vp.costPrice)}
-                                          </button>
-                                        )}
+                                        <CostCell p={vp} editingId={editingId} editCostPrice={editCostPrice} setEditingId={setEditingId} setEditCostPrice={setEditCostPrice} saveCostPrice={saveCostPrice} />
                                       </td>
                                       <td className="px-4 py-2.5 text-right">
                                         <span className="font-bold text-slate-900">{vp.totalQtySold ?? 0}</span>
@@ -580,16 +551,7 @@ export default function Products() {
                                   ) : <span className="text-xs text-slate-300">—</span>}
                                 </td>
                                 <td className="px-4 py-3">
-                                  {editingId === p.id ? (
-                                    <div className="flex items-center gap-1">
-                                      <input type="text" value={editCostPrice} onChange={(e) => setEditCostPrice(e.target.value)} placeholder="0,00" className="rounded-lg border border-slate-200 px-2 py-1 text-xs w-20" autoFocus onKeyDown={(e) => { if (e.key === "Enter") saveCostPrice(p.id, editCostPrice); if (e.key === "Escape") setEditingId(null); }} />
-                                      <button onClick={() => saveCostPrice(p.id, editCostPrice)} className="rounded-lg bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white">OK</button>
-                                    </div>
-                                  ) : (
-                                    <button onClick={() => { setEditingId(p.id); setEditCostPrice(p.costPrice != null ? String(p.costPrice) : ""); }} className="text-xs font-bold text-slate-900 hover:text-sky-600 transition">
-                                      {fmtMoney(p.costPrice)}
-                                    </button>
-                                  )}
+                                  <CostCell p={p} editingId={editingId} editCostPrice={editCostPrice} setEditingId={setEditingId} setEditCostPrice={setEditCostPrice} saveCostPrice={saveCostPrice} />
                                 </td>
                                 <td className="px-4 py-3 text-right">
                                   <span className="font-bold text-slate-900">{p.totalQtySold ?? 0}</span>
@@ -621,123 +583,7 @@ export default function Products() {
                 </div>
               </div>
             </div>
-          </>
-        )}
-
-        {tab === "consolidate" && (
-          <>
-            <div className={cn(UI.card, "p-6")}>
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-violet-100 flex items-center justify-center flex-shrink-0">
-                  <Sparkles className="w-5 h-5 text-violet-600" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-black tracking-tight text-slate-900">Consolidar produtos entre canais</h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    O sistema analisa os nomes dos produtos e sugere quais são o mesmo produto em canais diferentes
-                    (Shopee, TikTok, Tray). Ao consolidar, eles são agrupados e o SKU é compartilhado.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {loadingSugg ? (
-              <div className="flex items-center justify-center py-12 text-slate-500">
-                <Loader2 className="w-5 h-5 animate-spin mr-2" /> Buscando sugestões...
-              </div>
-            ) : suggestions.length === 0 ? (
-              <div className={cn(UI.card, "p-8 text-center")}>
-                <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
-                <div className="text-sm font-bold text-slate-700">Nenhuma sugestão de consolidação encontrada.</div>
-                <div className="text-xs text-slate-500 mt-1">
-                  Todos os produtos com nomes semelhantes entre canais já foram consolidados, ou não há produtos em múltiplos canais.
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {suggestions.map((s) => {
-                  const bySource: Record<string, typeof s.products> = {};
-                  for (const p of s.products) {
-                    const src = p.source || "other";
-                    if (!bySource[src]) bySource[src] = [];
-                    bySource[src].push(p);
-                  }
-                  const channels = Object.keys(bySource);
-                  const baseName = s.products[0]?.name?.replace(/ - .*$/, "") || s.matchKey;
-
-                  return (
-                    <div key={s.matchKey} className={cn(UI.card, "p-5")}>
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <h3 className="text-sm font-extrabold text-slate-900">{baseName}</h3>
-                          <div className="mt-1 flex items-center gap-2">
-                            {channels.map((ch) => (
-                              <SourceBadge key={ch} source={ch} />
-                            ))}
-                            <span className="text-xs text-slate-500">
-                              {s.products.length} produto(s) em {channels.length} canais
-                            </span>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() =>
-                            handleConsolidate(
-                              s.matchKey,
-                              s.products.map((p) => p.id),
-                              baseName
-                            )
-                          }
-                          disabled={consolidating === s.matchKey}
-                          className={cn(
-                            "inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-extrabold transition flex-shrink-0",
-                            consolidating === s.matchKey
-                              ? "bg-slate-200 text-slate-500"
-                              : "bg-violet-600 text-white hover:bg-violet-700"
-                          )}
-                        >
-                          {consolidating === s.matchKey ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : (
-                            <Link2 className="w-3 h-3" />
-                          )}
-                          Consolidar
-                        </button>
-                      </div>
-
-                      <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-                        {channels.map((ch) => (
-                          <div key={ch} className="rounded-xl border border-slate-200 p-3">
-                            <div className="flex items-center gap-2 mb-2">
-                              <SourceBadge source={ch} />
-                              <span className="text-xs font-bold text-slate-500">{bySource[ch].length} produto(s)</span>
-                            </div>
-                            <div className="space-y-1">
-                              {bySource[ch].map((p) => (
-                                <div key={p.id} className="text-xs text-slate-700 flex items-center gap-1.5">
-                                  <span className="font-medium truncate max-w-[200px]">{p.name}</span>
-                                  {p.variationName && (
-                                    <span className="text-[10px] bg-violet-50 text-violet-600 border border-violet-200 rounded px-1 py-0.5 flex-shrink-0">
-                                      {p.variationName}
-                                    </span>
-                                  )}
-                                  {p.sku && (
-                                    <span className="text-[10px] bg-emerald-50 text-emerald-600 rounded px-1 py-0.5 flex-shrink-0">
-                                      SKU: {p.sku}
-                                    </span>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </>
-        )}
+        </>
       </div>
     </div>
   );

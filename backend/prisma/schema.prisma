@@ -24,7 +24,14 @@ model Order {
   returnRecord OrderReturn?
   commissionFee Float?  // Net Commission Fee (taxa de comissão líquida)
   serviceFee    Float?  // Taxa de serviço bruta
+  easyReturnFee Float?  // Taxa Devolução Fácil Shopee (income)
+  autoRechargeFee Float?  // Taxa Recarga Automática (income)
+  settlementAmount  Float?  // Valor liquidado (relatório income TikTok)
+  estimatedSettlementAmount Float?  // Valor estimado a liquidar (relatório onhold TikTok)
+  partnerCommission Float?  // Comissões afiliados/criadores/agências (income TikTok)
+  paymentId         String? @default("")  // ID do pagamento (income TikTok)
   freight       Float?  // Frete (apenas canal tray)
+  freightManual Boolean @default(false) // true = frete editado na simulação; import não sobrescreve
   paymentType   String? @default("")  // Tipo de pagamento (ex: Pix - Vindi, Cartão de Crédito - Mercado Pago)
   @@unique([orderId, source])
 }
@@ -51,7 +58,9 @@ model OrderItem {
   productCode String
   name        String
   unitPrice   Float
-  discount    Float?   @default(0)  // Desconto dado pela loja no produto
+  discount    Float?   @default(0)  // Desconto total do item (legado / soma)
+  sellerDiscount   Float?   @default(0)
+  platformDiscount Float?   @default(0)
   quantity    Int
   totalPrice  Float
 
@@ -80,9 +89,45 @@ model Product {
   orderItems       OrderItem[]
   stock            ProductStock?
   productGroupItem ProductGroupItem?
+  costHistory      ProductCostHistory[]
+  masterProductId  Int?
+  masterProduct    MasterProduct? @relation(fields: [masterProductId], references: [id], onDelete: SetNull)
 
   @@index([sku])
   @@index([parentCode])
+  @@index([masterProductId])
+}
+
+model MasterProduct {
+  id        Int      @id @default(autoincrement())
+  sku       String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products    Product[]
+  stock       MasterProductStock?
+  costHistory MasterProductCostHistory[]
+}
+
+model MasterProductStock {
+  id              Int           @id @default(autoincrement())
+  masterProductId Int           @unique
+  quantity        Int           @default(0)
+  updatedAt       DateTime      @updatedAt
+  masterProduct   MasterProduct @relation(fields: [masterProductId], references: [id], onDelete: Cascade)
+}
+
+model MasterProductCostHistory {
+  id              Int           @id @default(autoincrement())
+  masterProductId Int
+  unitCost        Float
+  effectiveDate   DateTime
+  notes           String        @default("")
+  createdAt       DateTime      @default(now())
+  masterProduct   MasterProduct @relation(fields: [masterProductId], references: [id], onDelete: Cascade)
+
+  @@index([masterProductId, effectiveDate])
 }
 
 model ProductGroup {
@@ -127,6 +172,18 @@ model ProductStock {
   updatedAt DateTime @updatedAt
 }
 
+model ProductCostHistory {
+  id            Int      @id @default(autoincrement())
+  productId     Int
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  unitCost      Float
+  effectiveDate DateTime
+  notes         String   @default("")
+  createdAt     DateTime @default(now())
+
+  @@index([productId, effectiveDate])
+}
+
 model AdSpend {
   id        Int      @id @default(autoincrement())
   month     DateTime // sempre usar primeiro dia do mês (ex.: 2026-01-01)
@@ -153,6 +210,14 @@ model PaymentTypeFee {
   @@index([month, channel])
 }
 
+model SimulationTaxSetting {
+  id         Int      @id @default(autoincrement())
+  month      DateTime @unique // primeiro dia do mês (ex.: 2026-01-01)
+  taxPercent Float    // alíquota (%) sobre o faturamento bruto da simulação
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
 model ShopeeIntegration {
   id               Int       @id @default(autoincrement())
   partnerId        String
@@ -169,14 +234,46 @@ model ShopeeIntegration {
   updatedAt        DateTime  @updatedAt
 }
 
+model TiktokShopIntegration {
+  id               Int       @id @default(autoincrement())
+  appKey           String
+  appSecret        String
+  shopId           String?
+  shopName         String?
+  shopCipher       String?
+  accessToken      String?
+  refreshToken     String?
+  tokenExpiresAt   DateTime?
+  refreshExpiresAt DateTime?
+  status           String    @default("disconnected") // disconnected | connected | expired
+  lastSyncAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+model TiktokAdsIntegration {
+  id             Int       @id @default(autoincrement())
+  appId          String
+  appSecret      String
+  advertiserId   String?
+  advertiserName String?
+  accessToken    String?
+  status         String    @default("disconnected") // disconnected | connected | expired
+  lastSyncAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
 model Bill {
   id            Int      @id @default(autoincrement())
+  supplier      String   @default("")
   description   String   // ex: "Fornecedor X - Lote Março"
   invoiceNumber String?  // nota fiscal (opcional)
   totalAmount   Float    // valor total da conta
   dueDate       DateTime? // data limite (opcional)
   status        String   @default("pending") // pending | partial | paid
   isFixedCost   Boolean  @default(false) // true = custo fixo (ex.: aluguel, folha)
+  externalId    String?  @unique // Identificador Nubank / importação extrato
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   payments      BillPayment[]
@@ -192,4 +289,30 @@ model BillPayment {
   notes     String    @default("")
   createdAt DateTime  @default(now())
   @@index([billId])
+}
+
+model Receivable {
+  id            Int      @id @default(autoincrement())
+  supplier      String   @default("") // cliente / pagador
+  description   String
+  invoiceNumber String?
+  totalAmount   Float
+  dueDate       DateTime?
+  status        String   @default("pending") // pending | partial | paid
+  externalId    String?  @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  receipts      ReceivableReceipt[]
+}
+
+model ReceivableReceipt {
+  id           Int        @id @default(autoincrement())
+  receivableId Int
+  receivable   Receivable @relation(fields: [receivableId], references: [id], onDelete: Cascade)
+  amount       Float
+  dueDate      DateTime   @default(now())
+  receivedAt   DateTime?  // null = pendente
+  notes        String     @default("")
+  createdAt    DateTime   @default(now())
+  @@index([receivableId])
 }

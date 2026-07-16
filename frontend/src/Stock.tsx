@@ -21,8 +21,18 @@ type StockCurrentItem = {
   sold: number;
   current: number;
   costPrice: number | null;
+  effectiveCostDate?: string | null;
+  costSource?: "stock" | "manual" | null;
   productNames?: string[];
   variations?: VariationSold[];
+};
+type CostHistoryEntry = {
+  id: number;
+  productId: number;
+  unitCost: number;
+  effectiveDate: string;
+  notes: string;
+  createdAt: string;
 };
 type StockCurrent = { stockStartDate: string | null; items: StockCurrentItem[] };
 type StockProjection = {
@@ -54,6 +64,18 @@ function fmtMoney(v: number | null) {
   return Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function fmtDateBR(iso: string | null | undefined) {
+  if (!iso) return "-";
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return iso;
+  return `${d}/${m}/${y}`;
+}
+
 export default function Stock() {
   const [config, setConfig] = useState<InventoryConfig | null>(null);
   const [stockStartDate, setStockStartDate] = useState("");
@@ -64,12 +86,16 @@ export default function Stock() {
   const [stockCurrent, setStockCurrent] = useState<StockCurrent | null>(null);
   const [projection, setProjection] = useState<StockProjection | null>(null);
   const [editingQty, setEditingQty] = useState<Record<string, string>>({});
+  const [editingCost, setEditingCost] = useState<Record<string, string>>({});
+  const [editingDate, setEditingDate] = useState<Record<string, string>>({});
   const [productFilter, setProductFilter] = useState("");
   const [productGroups, setProductGroups] = useState<ProductGroup[]>([]);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupProductIds, setNewGroupProductIds] = useState<number[]>([]);
   const [showNewGroup, setShowNewGroup] = useState(false);
   const [expandedStockGroups, setExpandedStockGroups] = useState<Set<number>>(new Set());
+  const [expandedCostHistory, setExpandedCostHistory] = useState<Set<number>>(new Set());
+  const [costHistoryCache, setCostHistoryCache] = useState<Record<number, CostHistoryEntry[]>>({});
 
   async function fetchConfig() {
     try {
@@ -170,14 +196,51 @@ export default function Stock() {
     }
   }
 
-  async function saveProductQuantity(productId: number, quantityStr: string) {
+  async function fetchCostHistory(productId: number) {
+    try {
+      const res = await fetch(`${API_URL}/api/products/${productId}/cost-history`);
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setCostHistoryCache((prev) => ({ ...prev, [productId]: data }));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function toggleCostHistory(productId: number) {
+    setExpandedCostHistory((prev) => {
+      const next = new Set(prev);
+      if (next.has(productId)) {
+        next.delete(productId);
+      } else {
+        next.add(productId);
+        if (!costHistoryCache[productId]) fetchCostHistory(productId);
+      }
+      return next;
+    });
+  }
+
+  async function saveProductQuantity(productId: number, quantityStr: string, costStr?: string, dateStr?: string) {
     const quantity = parseInt(quantityStr, 10) || 0;
+    const costKey = `p-${productId}`;
+    const unitCost = costStr ?? editingCost[costKey] ?? "";
+    const effectiveDate = dateStr ?? editingDate[costKey] ?? todayISO();
+    if (quantity > 0 && !String(unitCost).trim()) {
+      setMessage("Informe o preço de custo quando a quantidade for maior que zero.");
+      return;
+    }
     setMessage("Salvando...");
     try {
+      const body: Record<string, unknown> = { productId, quantity };
+      if (String(unitCost).trim()) {
+        body.unitCost = String(unitCost).replace(",", ".");
+        body.effectiveDate = effectiveDate;
+      }
       const res = await fetch(`${API_URL}/api/product-stock`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId, quantity }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -188,6 +251,7 @@ export default function Stock() {
       fetchProductStock();
       fetchStockCurrent();
       fetchProjection();
+      if (expandedCostHistory.has(productId)) fetchCostHistory(productId);
     } catch (err: any) {
       setMessage(`Erro: ${err.message}`);
     }
@@ -354,6 +418,8 @@ export default function Stock() {
                     <th className="px-4 py-3">Abertura</th>
                     <th className="px-4 py-3">Vendido</th>
                     <th className="px-4 py-3">Atual</th>
+                    <th className="px-4 py-3">Custo vigente</th>
+                    <th className="px-4 py-3">Vigente desde</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -361,6 +427,9 @@ export default function Stock() {
                     const key = item.type === "group" ? `g-${item.productGroupId}` : `p-${item.productId}`;
                     const hasVariations = item.type === "group" && item.variations && item.variations.length > 1;
                     const isExpanded = hasVariations && item.productGroupId != null && expandedStockGroups.has(item.productGroupId);
+                    const pid = item.productId;
+                    const showHistory = pid != null && expandedCostHistory.has(pid);
+                    const history = pid != null ? costHistoryCache[pid] : undefined;
 
                     return (
                       <React.Fragment key={key}>
@@ -406,7 +475,48 @@ export default function Stock() {
                               {item.current}
                             </span>
                           </td>
+                          <td className="px-4 py-3">
+                            <div className="font-semibold text-slate-900">{fmtMoney(item.costPrice)}</div>
+                            {item.costSource === "stock" && (
+                              <span className="text-[10px] text-emerald-700 font-bold">estoque</span>
+                            )}
+                            {item.costSource === "manual" && (
+                              <span className="text-[10px] text-slate-500 font-bold">manual</span>
+                            )}
+                            {pid != null && (
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); toggleCostHistory(pid); }}
+                                className="block text-[10px] text-sky-600 font-bold hover:underline mt-0.5"
+                              >
+                                {showHistory ? "Ocultar histórico" : "Ver histórico"}
+                              </button>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-slate-700 text-xs">{fmtDateBR(item.effectiveCostDate)}</td>
                         </tr>
+                        {showHistory && pid != null && (
+                          <tr className="bg-sky-50/40">
+                            <td colSpan={6} className="px-4 py-3">
+                              {!history ? (
+                                <span className="text-xs text-slate-500">Carregando histórico...</span>
+                              ) : history.length === 0 ? (
+                                <span className="text-xs text-slate-500">Nenhum lançamento de custo registrado.</span>
+                              ) : (
+                                <div className="space-y-1">
+                                  <div className="text-[10px] font-bold uppercase text-slate-500 mb-1">Histórico de custos</div>
+                                  {history.map((h) => (
+                                    <div key={h.id} className="flex flex-wrap gap-3 text-xs text-slate-700">
+                                      <span className="font-bold">{fmtDateBR(h.effectiveDate)}</span>
+                                      <span>{fmtMoney(h.unitCost)}</span>
+                                      {h.notes && <span className="text-slate-500">({h.notes})</span>}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
                         {isExpanded && item.variations!.map((v) => (
                           <tr key={`${key}-v-${v.productId}`} className="bg-violet-50/30">
                             <td className="px-4 py-2 pl-10">
@@ -430,6 +540,8 @@ export default function Stock() {
                             </td>
                             <td className="px-4 py-2 text-xs text-slate-400">—</td>
                             <td className="px-4 py-2 text-xs font-bold text-slate-700">{v.sold}</td>
+                            <td className="px-4 py-2 text-xs text-slate-400">—</td>
+                            <td className="px-4 py-2 text-xs text-slate-400">—</td>
                             <td className="px-4 py-2 text-xs text-slate-400">—</td>
                           </tr>
                         ))}
@@ -534,7 +646,7 @@ export default function Stock() {
           <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
             <h3 className="text-sm font-extrabold tracking-wide text-slate-900">Cadastrar quantidade em estoque (abertura)</h3>
             <p className="text-xs text-slate-500 mt-1">
-              Defina a quantidade inicial por grupo (produtos consolidados) ou por produto avulso.
+              Defina a quantidade inicial por produto avulso. Informe também o preço de custo e a data de vigência — esse custo passa a valer na simulação a partir dessa data.
             </p>
           </div>
           <div className="p-6">
@@ -608,24 +720,46 @@ export default function Stock() {
                       return (
                         <div
                           key={p.id}
-                          className="flex items-center gap-4 py-2 border-b border-slate-100 last:border-0"
+                          className="flex flex-wrap items-end gap-3 py-2 border-b border-slate-100 last:border-0"
                         >
                           <div className="flex-1 min-w-0">
                             <div className="font-semibold text-slate-900 truncate">{p.name}</div>
                             <div className="text-xs text-slate-500">{p.code}</div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="number"
-                              min={0}
-                              value={qty}
-                              onChange={(e) => setEditingQty((prev) => ({ ...prev, [qtyKey]: e.target.value }))}
-                              placeholder="0"
-                              className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm font-semibold text-slate-900"
-                            />
+                          <div className="flex flex-wrap items-end gap-2">
+                            <div>
+                              <label className="block text-[10px] font-bold uppercase text-slate-400 mb-0.5">Qtd</label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={qty}
+                                onChange={(e) => setEditingQty((prev) => ({ ...prev, [qtyKey]: e.target.value }))}
+                                placeholder="0"
+                                className="w-20 rounded-lg border border-slate-200 px-2 py-1.5 text-sm font-semibold text-slate-900"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold uppercase text-slate-400 mb-0.5">Custo R$</label>
+                              <input
+                                type="text"
+                                value={editingCost[qtyKey] ?? ""}
+                                onChange={(e) => setEditingCost((prev) => ({ ...prev, [qtyKey]: e.target.value }))}
+                                placeholder="0,00"
+                                className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm font-semibold text-slate-900"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold uppercase text-slate-400 mb-0.5">Vigência</label>
+                              <input
+                                type="date"
+                                value={editingDate[qtyKey] ?? todayISO()}
+                                onChange={(e) => setEditingDate((prev) => ({ ...prev, [qtyKey]: e.target.value }))}
+                                className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm font-semibold text-slate-900"
+                              />
+                            </div>
                             <button
                               type="button"
-                              onClick={() => saveProductQuantity(p.id, String(qty))}
+                              onClick={() => saveProductQuantity(p.id, String(qty), editingCost[qtyKey] ?? "", editingDate[qtyKey] ?? todayISO())}
                               className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-bold text-white hover:bg-slate-800"
                             >
                               Salvar

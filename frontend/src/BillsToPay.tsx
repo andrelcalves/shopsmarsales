@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 
+import BankStatementImport from "./BankStatementImport";
 import { API_URL } from './config';
 
 type BillPayment = {
@@ -13,6 +14,7 @@ type BillPayment = {
 
 type Bill = {
   id: number;
+  supplier: string;
   description: string;
   invoiceNumber: string | null;
   totalAmount: number;
@@ -49,7 +51,13 @@ export default function BillsToPay() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("");
+  const [filterMonth, setFilterMonth] = useState<string>("");
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState<string>("");
+  const [filterFixedCost, setFilterFixedCost] = useState<string>("");
+  const [filterDescription, setFilterDescription] = useState<string>("");
+  const [filterSupplier, setFilterSupplier] = useState<string>("");
 
+  const [supplier, setSupplier] = useState("");
   const [description, setDescription] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [totalAmount, setTotalAmount] = useState("");
@@ -69,13 +77,20 @@ export default function BillsToPay() {
     { dueDate: "", amount: "" },
   ]);
   const [payDateByPaymentId, setPayDateByPaymentId] = useState<Record<number, string>>({});
+  const [importOpen, setImportOpen] = useState(false);
 
   async function fetchBills() {
     setLoading(true);
     try {
-      const url = filterStatus
-        ? `${API_URL}/api/bills?status=${encodeURIComponent(filterStatus)}`
-        : `${API_URL}/api/bills`;
+      const qs = new URLSearchParams();
+      if (filterStatus) qs.set("status", filterStatus);
+      if (filterMonth) qs.set("month", filterMonth);
+      if (filterPaymentStatus) qs.set("paymentStatus", filterPaymentStatus);
+      if (filterFixedCost) qs.set("isFixedCost", filterFixedCost);
+      if (filterDescription.trim()) qs.set("description", filterDescription.trim());
+      if (filterSupplier.trim()) qs.set("supplier", filterSupplier.trim());
+      const q = qs.toString();
+      const url = `${API_URL}/api/bills${q ? `?${q}` : ""}`;
       const res = await fetch(url);
       const data = await res.json();
       setBills(Array.isArray(data) ? data : []);
@@ -89,7 +104,7 @@ export default function BillsToPay() {
 
   useEffect(() => {
     fetchBills();
-  }, [filterStatus]);
+  }, [filterStatus, filterMonth, filterPaymentStatus, filterFixedCost, filterDescription, filterSupplier]);
 
   async function createBill(e: React.FormEvent) {
     e.preventDefault();
@@ -99,6 +114,7 @@ export default function BillsToPay() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          supplier,
           description,
           invoiceNumber: invoiceNumber || null,
           totalAmount,
@@ -109,6 +125,7 @@ export default function BillsToPay() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Falha ao salvar.");
       setMessage("Conta cadastrada com sucesso.");
+      setSupplier("");
       setDescription("");
       setInvoiceNumber("");
       setTotalAmount("");
@@ -209,6 +226,21 @@ export default function BillsToPay() {
     }
   }
 
+  async function updateBillFixedCost(billId: number, nextFixedCost: boolean) {
+    try {
+      const res = await fetch(`${API_URL}/api/bills/${billId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isFixedCost: nextFixedCost }),
+      });
+      if (!res.ok) throw new Error("Falha ao atualizar custo fixo.");
+      setMessage(nextFixedCost ? "Marcada como custo fixo." : "Removida de custo fixo.");
+      fetchBills();
+    } catch (err: any) {
+      setMessage(`Erro: ${err.message}`);
+    }
+  }
+
   async function deletePayment(billId: number, paymentId: number) {
     if (!window.confirm("Remover este pagamento?")) return;
     try {
@@ -228,12 +260,32 @@ export default function BillsToPay() {
     <div className={cn(UI.bg, "min-h-screen")}>
       <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
         <div className={cn(UI.card, "p-6")}>
-          <h2 className="text-lg font-black tracking-tight text-slate-900">Contas a pagar</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Cadastre contas/faturas e registre pagamentos em várias datas.
-          </p>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-black tracking-tight text-slate-900">Contas a pagar</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Cadastre contas/faturas e registre pagamentos em várias datas.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-extrabold text-emerald-800 hover:bg-emerald-100"
+            >
+              Importar extrato Nubank
+            </button>
+          </div>
 
           <form onSubmit={createBill} className="mt-5 grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+            <div className="md:col-span-2">
+              <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Fornecedor</label>
+              <input
+                value={supplier}
+                onChange={(e) => setSupplier(e.target.value)}
+                placeholder="ex: Fornecedor X"
+                className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
+              />
+            </div>
             <div className="md:col-span-3">
               <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Descrição</label>
               <input
@@ -299,26 +351,97 @@ export default function BillsToPay() {
         </div>
 
         <div className={cn(UI.card, "overflow-hidden")}>
-          <div className="px-6 pt-6 flex items-center justify-between flex-wrap gap-4">
-            <div className="flex items-center gap-3">
+          <div className="px-6 pt-6 space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-4">
               <h3 className="text-sm font-extrabold tracking-wide text-slate-900">Lista de contas</h3>
-              <select
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+              <button
+                onClick={fetchBills}
+                className="rounded-xl bg-white px-4 py-2 text-sm font-extrabold text-slate-900 shadow-sm border border-slate-200 hover:bg-slate-50 transition"
               >
-                <option value="">Todas</option>
-                <option value="pending">Pendentes</option>
-                <option value="partial">Parcialmente pagas</option>
-                <option value="paid">Pagas</option>
-              </select>
+                Atualizar
+              </button>
             </div>
-            <button
-              onClick={fetchBills}
-              className="rounded-xl bg-white px-4 py-2 text-sm font-extrabold text-slate-900 shadow-sm border border-slate-200 hover:bg-slate-50 transition"
-            >
-              Atualizar
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Mês</label>
+                <input
+                  type="month"
+                  value={filterMonth}
+                  onChange={(e) => setFilterMonth(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                />
+                {filterMonth && (
+                  <button
+                    type="button"
+                    onClick={() => setFilterMonth("")}
+                    className="mt-1 text-xs font-bold text-sky-600 hover:underline"
+                  >
+                    Limpar mês
+                  </button>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
+                  Status parcela
+                </label>
+                <select
+                  value={filterPaymentStatus}
+                  onChange={(e) => setFilterPaymentStatus(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                >
+                  <option value="">Todas</option>
+                  <option value="pending">Pendente</option>
+                  <option value="paid">Pago</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">
+                  Status conta
+                </label>
+                <select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                >
+                  <option value="">Todas</option>
+                  <option value="pending">Pendentes</option>
+                  <option value="partial">Parcialmente pagas</option>
+                  <option value="paid">Pagas</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Custo fixo</label>
+                <select
+                  value={filterFixedCost}
+                  onChange={(e) => setFilterFixedCost(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                >
+                  <option value="">Todos</option>
+                  <option value="true">Sim</option>
+                  <option value="false">Não</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Fornecedor</label>
+                <input
+                  type="text"
+                  value={filterSupplier}
+                  onChange={(e) => setFilterSupplier(e.target.value)}
+                  placeholder="Buscar..."
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold tracking-widest uppercase text-slate-500">Descrição</label>
+                <input
+                  type="text"
+                  value={filterDescription}
+                  onChange={(e) => setFilterDescription(e.target.value)}
+                  placeholder="Buscar..."
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                />
+              </div>
+            </div>
           </div>
 
           <div className="p-6 flex flex-col lg:flex-row gap-6">
@@ -329,6 +452,7 @@ export default function BillsToPay() {
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-slate-100 border-b border-slate-200">
                     <tr className="text-left text-xs font-extrabold tracking-widest uppercase text-slate-600">
+                      <th className="px-4 py-3">Fornecedor</th>
                       <th className="px-4 py-3">Descrição</th>
                       <th className="px-4 py-3">NF</th>
                       <th className="px-4 py-3">Total</th>
@@ -351,6 +475,7 @@ export default function BillsToPay() {
                           )}
                           onClick={() => setSelectedBillId(b.id)}
                         >
+                          <td className="px-4 py-3 font-semibold text-slate-800">{b.supplier || "—"}</td>
                           <td className="px-4 py-3 font-semibold text-slate-900">{b.description}</td>
                           <td className="px-4 py-3 text-slate-600">{b.invoiceNumber || "—"}</td>
                           <td className="px-4 py-3 font-bold text-slate-900">{formatMoney(b.totalAmount)}</td>
@@ -388,7 +513,7 @@ export default function BillsToPay() {
                     })}
                     {bills.length === 0 && !loading && (
                       <tr>
-                        <td className="px-4 py-6 text-slate-500" colSpan={8}>
+                        <td className="px-4 py-6 text-slate-500" colSpan={9}>
                           Nenhuma conta cadastrada.
                         </td>
                       </tr>
@@ -401,6 +526,9 @@ export default function BillsToPay() {
             {selectedBill && (
               <div className={cn(UI.card, "p-6 w-full lg:w-[28rem] shrink-0 overflow-auto")}>
                 <h4 className="text-sm font-extrabold text-slate-900">{selectedBill.description}</h4>
+                {selectedBill.supplier ? (
+                  <p className="mt-0.5 text-xs text-slate-500">Fornecedor: {selectedBill.supplier}</p>
+                ) : null}
                 {selectedBill.invoiceNumber && (
                   <p className="mt-0.5 text-xs text-slate-500">Nota fiscal: {selectedBill.invoiceNumber}</p>
                 )}
@@ -410,6 +538,15 @@ export default function BillsToPay() {
                     (selectedBill.payments || []).reduce((s, p) => s + (p.paidAt != null ? p.amount : 0), 0)
                   )}
                 </p>
+                <label className="mt-3 flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedBill.isFixedCost === true}
+                    onChange={(e) => updateBillFixedCost(selectedBill.id, e.target.checked)}
+                    className="rounded border-slate-300 text-slate-900 focus:ring-slate-500"
+                  />
+                  <span className="text-sm font-semibold text-slate-700">Conta é custo fixo</span>
+                </label>
 
                 <div className="mt-4 border-t border-slate-200 pt-4">
                   <p className="text-xs font-bold uppercase text-slate-500 mb-2">Gerar parcelas (até 4 vencimentos)</p>
@@ -575,6 +712,8 @@ export default function BillsToPay() {
             )}
           </div>
         </div>
+
+        <BankStatementImport open={importOpen} onClose={() => setImportOpen(false)} onSuccess={fetchBills} />
       </div>
     </div>
   );
