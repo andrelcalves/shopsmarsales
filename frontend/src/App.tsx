@@ -22,6 +22,7 @@ import ShopeeDuplicates from './ShopeeDuplicates';
 import ProductCurve from './ProductCurve';
 import Returns from './Returns';
 import Orders from './Orders';
+import AppSidebar, { type AppView, getViewTitle, MobileMenuButton } from './AppSidebar';
 
 import { API_URL } from './config';
 import { parseApiJson } from './api';
@@ -49,9 +50,17 @@ interface Sale {
 type OrderUploadSource = 'shopee' | 'tiktok' | 'tray' | 'atacado' | 'tray_varejo';
 
 function App() {
-  // Estado para controlar qual tela está visível: 'upload' ou 'dashboard'
-  const [currentView, setCurrentView] = useState<'upload' | 'dashboard' | 'ads_spend' | 'ads_dashboard' | 'contribution_dashboard' | 'sales_by_day' | 'bills_dashboard' | 'products' | 'payment_type_fees' | 'stock_overview' | 'stock_launch' | 'master_products' | 'simulation' | 'simulation_gross_revenue' | 'bills_to_pay' | 'receivables' | 'pricing' | 'shopee_integration' | 'shopee_duplicates' | 'product_curve' | 'returns' | 'orders'>('upload');
+  const [currentView, setCurrentView] = useState<AppView>('upload');
   const [grossRevenueParams, setGrossRevenueParams] = useState<GrossRevenueNavParams | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  function navigateTo(view: AppView) {
+    if (view === 'simulation_gross_revenue' && currentView !== 'simulation_gross_revenue') {
+      setGrossRevenueParams(null);
+    }
+    setCurrentView(view);
+  }
 
   // --- LÓGICA DA TELA DE UPLOAD ---
   const [file, setFile] = useState<File | null>(null);
@@ -273,287 +282,36 @@ function App() {
 
   return (
     <div className={cn(UI.bg, 'min-h-screen')}>
-      {/* Header com gradiente (mesma pegada do Dashboard) */}
-      <div className="bg-gradient-to-r from-sky-700 via-blue-700 to-indigo-700">
-        <div className="max-w-7xl mx-auto px-6 py-7 text-white">
-          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-            <div>
-              <div className="text-sm font-semibold tracking-wide opacity-95">CONSOLIDADOR DE VENDAS</div>
-              <h1 className="mt-2 text-3xl md:text-4xl font-black tracking-tight">
-                {currentView === 'upload'
-                  ? 'Upload & Lista'
-                  : currentView === 'dashboard'
-                    ? 'Vendas Geral'
-                    : currentView === 'sales_by_day'
-                      ? 'Vendas por Dia'
-                      : currentView === 'bills_dashboard'
-                        ? 'Contas a pagar'
-                        : currentView === 'ads_dashboard'
-                          ? 'Custo ADS'
-                          : currentView === 'contribution_dashboard'
-                            ? 'Margem por Canal'
-                            : currentView === 'ads_spend'
-                            ? 'Cadastro ADS'
-                            : currentView === 'products'
-                              ? 'Produtos'
-                              : currentView === 'payment_type_fees'
-                                ? 'Taxas Tray'
-                                : currentView === 'stock_overview'
-                                  ? 'Estoque'
-                                  : currentView === 'stock_launch'
-                                    ? 'Lançar estoque'
-                                    : currentView === 'master_products'
-                                      ? 'Produtos mestre'
-                                  : currentView === 'bills_to_pay'
-                                    ? 'Cadastro contas'
-                                    : currentView === 'receivables'
-                                      ? 'Contas a receber'
-                                    : currentView === 'pricing'
-                                      ? 'Precificação'
-                                      : currentView === 'simulation'
-                                        ? 'Simulação'
-                                        : currentView === 'simulation_gross_revenue'
-                                          ? 'Faturamento bruto'
-                                          : currentView === 'shopee_integration'
-                                          ? 'Integrações'
-                                          : currentView === 'shopee_duplicates'
-                                            ? 'Duplicatas Shopee'
-                                            : currentView === 'product_curve'
-                                              ? 'Curva ABC'
-                                              : currentView === 'returns'
-                                                ? 'Devoluções'
-                                                : currentView === 'orders'
-                                                  ? 'Pedidos'
-                                                  : 'Consolidador'}
+      <AppSidebar
+        currentView={currentView}
+        onNavigate={navigateTo}
+        collapsed={sidebarCollapsed}
+        onCollapsedChange={setSidebarCollapsed}
+        mobileOpen={mobileMenuOpen}
+        onMobileOpenChange={setMobileMenuOpen}
+      />
+
+      <div
+        className={cn(
+          'min-h-screen transition-[padding]',
+          sidebarCollapsed ? 'md:pl-[72px]' : 'md:pl-64',
+        )}
+      >
+        <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
+          <div className="flex items-center gap-3 px-4 py-3 md:px-6">
+            <MobileMenuButton onClick={() => setMobileMenuOpen(true)} />
+            <div className="min-w-0">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                Consolidador de vendas
+              </div>
+              <h1 className="truncate text-xl font-black tracking-tight text-slate-900 md:text-2xl">
+                {getViewTitle(currentView)}
               </h1>
             </div>
-
-            {/* Dashboards */}
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-white/70 uppercase tracking-wider">Dashboards</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 bg-white/10 border border-white/15 rounded-2xl p-1">
-                <button
-                  onClick={() => setCurrentView('dashboard')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'dashboard' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Vendas Geral
-                </button>
-                <button
-                  onClick={() => setCurrentView('sales_by_day')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'sales_by_day' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Vendas por Dia
-                </button>
-                <button
-                  onClick={() => setCurrentView('ads_dashboard')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'ads_dashboard' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Custo ADS
-                </button>
-                <button
-                  onClick={() => setCurrentView('contribution_dashboard')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'contribution_dashboard' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Margem por Canal
-                </button>
-                <button
-                  onClick={() => setCurrentView('stock_overview')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'stock_overview' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Estoque
-                </button>
-                <button
-                  onClick={() => setCurrentView('product_curve')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'product_curve' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Curva ABC
-                </button>
-                <button
-                  onClick={() => setCurrentView('simulation')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'simulation' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Simulação
-                </button>
-                <button
-                  onClick={() => {
-                    setGrossRevenueParams(null);
-                    setCurrentView('simulation_gross_revenue');
-                  }}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'simulation_gross_revenue' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Faturamento bruto
-                </button>
-              </div>
-              {/* Financeiro */}
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-white/70 uppercase tracking-wider">Financeiro</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 bg-white/10 border border-white/15 rounded-2xl p-1">
-                <button
-                  onClick={() => setCurrentView('bills_to_pay')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'bills_to_pay' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Cadastro contas
-                </button>
-                <button
-                  onClick={() => setCurrentView('ads_spend')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'ads_spend' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Cadastro ADS
-                </button>
-                <button
-                  onClick={() => setCurrentView('receivables')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'receivables' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Contas a receber
-                </button>
-                <button
-                  onClick={() => setCurrentView('bills_dashboard')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'bills_dashboard' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Contas a pagar
-                </button>
-              </div>
-              {/* Cadastros */}
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-white/70 uppercase tracking-wider">Cadastros</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 bg-white/10 border border-white/15 rounded-2xl p-1">
-                <button
-                  onClick={() => setCurrentView('upload')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'upload' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Upload & Lista
-                </button>
-                <button
-                  onClick={() => setCurrentView('products')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'products' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Produtos
-                </button>
-                <button
-                  onClick={() => setCurrentView('payment_type_fees')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'payment_type_fees' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Taxas Tray
-                </button>
-                <button
-                  onClick={() => setCurrentView('stock_launch')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'stock_launch' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Lançar estoque
-                </button>
-                <button
-                  onClick={() => setCurrentView('master_products')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'master_products' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Produtos mestre
-                </button>
-                <button
-                  onClick={() => setCurrentView('pricing')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'pricing' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Precificação
-                </button>
-                <button
-                  onClick={() => setCurrentView('shopee_integration')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'shopee_integration' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Integrações
-                </button>
-                <button
-                  onClick={() => setCurrentView('shopee_duplicates')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'shopee_duplicates' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Dup. Shopee
-                </button>
-                <button
-                  onClick={() => setCurrentView('orders')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'orders' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Pedidos
-                </button>
-                <button
-                  onClick={() => setCurrentView('returns')}
-                  className={cn(
-                    'px-4 py-2 rounded-xl text-sm font-extrabold transition',
-                    currentView === 'returns' ? 'bg-white text-slate-900 shadow-sm' : 'text-white/85 hover:bg-white/10'
-                  )}
-                >
-                  Devoluções
-                </button>
-              </div>
-            </div>
           </div>
-        </div>
-      </div>
+        </header>
 
-      {/* Conteúdo */}
+        <main>
       {currentView === 'dashboard' ? (
         <Dashboard />
       ) : currentView === 'sales_by_day' ? (
@@ -895,6 +653,8 @@ function App() {
           </div>
         </div>
       )}
+        </main>
+      </div>
     </div>
   );
 }
