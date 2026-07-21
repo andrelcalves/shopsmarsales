@@ -1,4 +1,4 @@
----
+--- 
 name: ui-ux
 description: >-
   Diretrizes de UI/UX do shopsmarsales, com navegação no formato do ERP UpSeller
@@ -65,6 +65,7 @@ Home / Dashboard
 
 Pedidos
   ├─ Lista de pedidos      (orders)
+  ├─ Venda Atacado WA      (atacado_manual)
   └─ Devoluções            (returns)
 
 Produtos

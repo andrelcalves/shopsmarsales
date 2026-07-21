@@ -22,6 +22,7 @@ import ShopeeDuplicates from './ShopeeDuplicates';
 import ProductCurve from './ProductCurve';
 import Returns from './Returns';
 import Orders from './Orders';
+import AtacadoManualSale from './AtacadoManualSale';
 import AppSidebar, { type AppView, getViewTitle, MobileMenuButton } from './AppSidebar';
 
 import { API_URL } from './config';
@@ -368,6 +369,8 @@ function App() {
         <Returns />
       ) : currentView === 'orders' ? (
         <Orders />
+      ) : currentView === 'atacado_manual' ? (
+        <AtacadoManualSale />
       ) : (
         <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
           {/* Card: Upload */}

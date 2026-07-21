@@ -37,7 +37,8 @@ export type AppView =
   | 'shopee_duplicates'
   | 'product_curve'
   | 'returns'
-  | 'orders';
+  | 'orders'
+  | 'atacado_manual';
 
 type NavItem = { view: AppView; label: string };
 
@@ -64,6 +65,7 @@ const NAV_MODULES: NavModule[] = [
     icon: ShoppingCart,
     items: [
       { view: 'orders', label: 'Lista de pedidos' },
+      { view: 'atacado_manual', label: 'Venda Atacado (WhatsApp)' },
       { view: 'returns', label: 'Devoluções' },
     ],
   },
@@ -151,6 +153,7 @@ const VIEW_TITLES: Record<AppView, string> = {
   product_curve: 'Curva ABC',
   returns: 'Devoluções',
   orders: 'Lista de pedidos',
+  atacado_manual: 'Venda Atacado (WhatsApp)',
 };
 
 export function getViewTitle(view: AppView): string {
