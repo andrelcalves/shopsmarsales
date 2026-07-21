@@ -1963,143 +1963,182 @@ async function main() {
   //   orderId?: string,
   //   items: [{ masterProductId?: number, productId?: number, quantity: number, unitPrice: number }]
   // }
+  type ManualResolvedLine = {
+    productId: number;
+    productCode: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    totalPrice: number;
+    masterProductId: number | null;
+  };
+
+  function isManualAtacadoOrder(order: { orderId: string; productName?: string | null }) {
+    const id = String(order.orderId || '');
+    const name = String(order.productName || '');
+    return id.startsWith('WA-') || name.startsWith('[WhatsApp]');
+  }
+
+  function parseManualCustomerName(productName: string): string {
+    const m = String(productName || '').match(/^\[WhatsApp\]\s+(.+?)\s+—\s+/);
+    return m ? m[1].trim() : '';
+  }
+
+  function buildManualProductName(customerName: string, mergedLines: ManualResolvedLine[]) {
+    const firstName = mergedLines[0]?.name || 'Pedido Atacado';
+    const suffix = mergedLines.length > 1 ? ` (+${mergedLines.length - 1})` : '';
+    return customerName
+      ? `[WhatsApp] ${customerName} — ${firstName}${suffix}`
+      : `[WhatsApp] ${firstName}${suffix}`;
+  }
+
+  async function resolveManualOrderItems(
+    rawItems: unknown[],
+  ): Promise<{ ok: true; lines: ManualResolvedLine[] } | { ok: false; status: number; message: string }> {
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      return { ok: false, status: 400, message: 'Informe ao menos um item.' };
+    }
+
+    const lines: ManualResolvedLine[] = [];
+
+    for (const raw of rawItems as Array<any>) {
+      const qty = Math.floor(Number(raw?.quantity));
+      const unitPrice = parseBrNumber(raw?.unitPrice);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        return { ok: false, status: 400, message: 'Cada item precisa de quantity > 0.' };
+      }
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        return { ok: false, status: 400, message: 'Cada item precisa de unitPrice válido.' };
+      }
+
+      const masterProductId = raw?.masterProductId != null ? parseInt(String(raw.masterProductId), 10) : NaN;
+      const productIdIn = raw?.productId != null ? parseInt(String(raw.productId), 10) : NaN;
+
+      let product: {
+        id: number;
+        code: string;
+        name: string;
+        sku: string | null;
+        masterProductId: number | null;
+      } | null = null;
+
+      if (Number.isInteger(masterProductId) && masterProductId > 0) {
+        const master = await (prisma as any).masterProduct.findUnique({
+          where: { id: masterProductId },
+          include: { products: true },
+        });
+        if (!master) {
+          return { ok: false, status: 400, message: `Produto mestre ${masterProductId} não encontrado.` };
+        }
+        const atacadoExisting = (master.products as Array<any>).find(
+          (p) => String(p.source ?? '').toLowerCase() === SOURCE_ATACADO,
+        );
+        if (atacadoExisting) {
+          product = atacadoExisting;
+        } else {
+          const sku = String(master.sku || '').trim() || `M${master.id}`;
+          const code = `${SOURCE_ATACADO}_${sku}`;
+          product = await (prisma as any).product.upsert({
+            where: { code },
+            update: {
+              name: master.name,
+              sku,
+              source: SOURCE_ATACADO,
+              masterProductId: master.id,
+            },
+            create: {
+              code,
+              name: master.name,
+              sku,
+              source: SOURCE_ATACADO,
+              masterProductId: master.id,
+            },
+          });
+        }
+      } else if (Number.isInteger(productIdIn) && productIdIn > 0) {
+        product = await (prisma as any).product.findUnique({ where: { id: productIdIn } });
+        if (!product) {
+          return { ok: false, status: 400, message: `Produto ${productIdIn} não encontrado.` };
+        }
+      } else {
+        return { ok: false, status: 400, message: 'Cada item precisa de masterProductId ou productId.' };
+      }
+
+      const skuOrCode = String(product!.sku || '').trim()
+        || String(product!.code || '').replace(new RegExp(`^${SOURCE_ATACADO}_`, 'i'), '')
+        || String(product!.id);
+      lines.push({
+        productId: product!.id,
+        productCode: skuOrCode,
+        name: product!.name,
+        quantity: qty,
+        unitPrice: Number(unitPrice.toFixed(2)),
+        totalPrice: Number((unitPrice * qty).toFixed(2)),
+        masterProductId: product!.masterProductId ?? (Number.isInteger(masterProductId) ? masterProductId : null),
+      });
+    }
+
+    const byCode = new Map<string, ManualResolvedLine>();
+    for (const line of lines) {
+      const prev = byCode.get(line.productCode);
+      if (prev) {
+        if (prev.unitPrice !== line.unitPrice) {
+          return {
+            ok: false,
+            status: 400,
+            message: `SKU ${line.productCode} repetido com preços diferentes. Unifique as linhas.`,
+          };
+        }
+        prev.quantity += line.quantity;
+        prev.totalPrice = Number((prev.unitPrice * prev.quantity).toFixed(2));
+      } else {
+        byCode.set(line.productCode, { ...line });
+      }
+    }
+
+    return { ok: true, lines: [...byCode.values()] };
+  }
+
+  function parseManualOrderHeader(body: any):
+    | { ok: true; paymentType: string; orderDate: Date; status: string; customerName: string; freight: number | null }
+    | { ok: false; status: number; message: string } {
+    const paymentType = String(body.paymentType ?? '').trim();
+    if (!paymentType) {
+      return { ok: false, status: 400, message: 'Forma de pagamento obrigatória.' };
+    }
+    const dateStr = String(body.orderDate ?? '').trim();
+    const orderDate = dateStr ? new Date(`${dateStr}T12:00:00`) : new Date();
+    if (Number.isNaN(orderDate.getTime())) {
+      return { ok: false, status: 400, message: 'orderDate inválida (use YYYY-MM-DD).' };
+    }
+    const status = String(body.status ?? 'Pago').trim() || 'Pago';
+    const customerName = String(body.customerName ?? '').trim();
+    let freight: number | null = null;
+    if (body.freight !== undefined && body.freight !== null && body.freight !== '') {
+      const parsedFreight = parseBrNumber(body.freight);
+      if (!Number.isFinite(parsedFreight) || parsedFreight < 0) {
+        return { ok: false, status: 400, message: 'freight inválido.' };
+      }
+      freight = Number(parsedFreight.toFixed(2));
+    }
+    return { ok: true, paymentType, orderDate, status, customerName, freight };
+  }
+
   app.post('/api/orders/manual', express.json(), async (req, res) => {
     try {
       const body = req.body ?? {};
       const source = SOURCE_ATACADO;
-      const paymentType = String(body.paymentType ?? '').trim();
-      if (!paymentType) {
-        return res.status(400).json({ message: 'Forma de pagamento obrigatória.' });
-      }
+      const header = parseManualOrderHeader(body);
+      if (!header.ok) return res.status(header.status).json({ message: header.message });
 
-      const dateStr = String(body.orderDate ?? '').trim();
-      const orderDate = dateStr ? new Date(`${dateStr}T12:00:00`) : new Date();
-      if (Number.isNaN(orderDate.getTime())) {
-        return res.status(400).json({ message: 'orderDate inválida (use YYYY-MM-DD).' });
-      }
+      const resolved = await resolveManualOrderItems(Array.isArray(body.items) ? body.items : []);
+      if (!resolved.ok) return res.status(resolved.status).json({ message: resolved.message });
 
-      const status = String(body.status ?? 'Pago').trim() || 'Pago';
-      const customerName = String(body.customerName ?? '').trim();
-      const rawItems = Array.isArray(body.items) ? body.items : [];
-      if (rawItems.length === 0) {
-        return res.status(400).json({ message: 'Informe ao menos um item.' });
-      }
-
-      let freight: number | null = null;
-      if (body.freight !== undefined && body.freight !== null && body.freight !== '') {
-        const parsedFreight = parseBrNumber(body.freight);
-        if (!Number.isFinite(parsedFreight) || parsedFreight < 0) {
-          return res.status(400).json({ message: 'freight inválido.' });
-        }
-        freight = Number(parsedFreight.toFixed(2));
-      }
-
-      type ResolvedLine = {
-        productId: number;
-        productCode: string;
-        name: string;
-        quantity: number;
-        unitPrice: number;
-        totalPrice: number;
-      };
-      const lines: ResolvedLine[] = [];
-
-      for (const raw of rawItems) {
-        const qty = Math.floor(Number(raw?.quantity));
-        const unitPrice = parseBrNumber(raw?.unitPrice);
-        if (!Number.isFinite(qty) || qty <= 0) {
-          return res.status(400).json({ message: 'Cada item precisa de quantity > 0.' });
-        }
-        if (!Number.isFinite(unitPrice) || unitPrice < 0) {
-          return res.status(400).json({ message: 'Cada item precisa de unitPrice válido.' });
-        }
-
-        const masterProductId = raw?.masterProductId != null ? parseInt(String(raw.masterProductId), 10) : NaN;
-        const productIdIn = raw?.productId != null ? parseInt(String(raw.productId), 10) : NaN;
-
-        let product: { id: number; code: string; name: string; sku: string | null } | null = null;
-
-        if (Number.isInteger(masterProductId) && masterProductId > 0) {
-          const master = await (prisma as any).masterProduct.findUnique({
-            where: { id: masterProductId },
-            include: { products: true },
-          });
-          if (!master) {
-            return res.status(400).json({ message: `Produto mestre ${masterProductId} não encontrado.` });
-          }
-          const atacadoExisting = (master.products as Array<any>).find(
-            (p) => String(p.source ?? '').toLowerCase() === SOURCE_ATACADO,
-          );
-          if (atacadoExisting) {
-            product = atacadoExisting;
-          } else {
-            const sku = String(master.sku || '').trim() || `M${master.id}`;
-            const code = `${SOURCE_ATACADO}_${sku}`;
-            product = await (prisma as any).product.upsert({
-              where: { code },
-              update: {
-                name: master.name,
-                sku,
-                source: SOURCE_ATACADO,
-                masterProductId: master.id,
-              },
-              create: {
-                code,
-                name: master.name,
-                sku,
-                source: SOURCE_ATACADO,
-                masterProductId: master.id,
-              },
-            });
-          }
-        } else if (Number.isInteger(productIdIn) && productIdIn > 0) {
-          product = await (prisma as any).product.findUnique({ where: { id: productIdIn } });
-          if (!product) {
-            return res.status(400).json({ message: `Produto ${productIdIn} não encontrado.` });
-          }
-        } else {
-          return res.status(400).json({
-            message: 'Cada item precisa de masterProductId ou productId.',
-          });
-        }
-
-        const skuOrCode = String(product!.sku || '').trim()
-          || String(product!.code || '').replace(new RegExp(`^${SOURCE_ATACADO}_`, 'i'), '')
-          || String(product!.id);
-        lines.push({
-          productId: product!.id,
-          productCode: skuOrCode,
-          name: product!.name,
-          quantity: qty,
-          unitPrice: Number(unitPrice.toFixed(2)),
-          totalPrice: Number((unitPrice * qty).toFixed(2)),
-        });
-      }
-
-      // Evita conflito de productCode duplicado no mesmo pedido
-      const byCode = new Map<string, ResolvedLine>();
-      for (const line of lines) {
-        const prev = byCode.get(line.productCode);
-        if (prev) {
-          if (prev.unitPrice !== line.unitPrice) {
-            return res.status(400).json({
-              message: `SKU ${line.productCode} repetido com preços diferentes. Unifique as linhas.`,
-            });
-          }
-          prev.quantity += line.quantity;
-          prev.totalPrice = Number((prev.unitPrice * prev.quantity).toFixed(2));
-        } else {
-          byCode.set(line.productCode, { ...line });
-        }
-      }
-      const mergedLines = [...byCode.values()];
+      const mergedLines = resolved.lines;
       const itemsTotal = mergedLines.reduce((s, l) => s + l.totalPrice, 0);
-      const totalPrice = Number((itemsTotal + (freight || 0)).toFixed(2));
+      const totalPrice = Number((itemsTotal + (header.freight || 0)).toFixed(2));
       const quantity = mergedLines.reduce((s, l) => s + l.quantity, 0);
-      const firstName = mergedLines[0]?.name || 'Pedido Atacado';
-      const productName = customerName
-        ? `[WhatsApp] ${customerName} — ${firstName}${mergedLines.length > 1 ? ` (+${mergedLines.length - 1})` : ''}`
-        : `[WhatsApp] ${firstName}${mergedLines.length > 1 ? ` (+${mergedLines.length - 1})` : ''}`;
+      const productName = buildManualProductName(header.customerName, mergedLines);
 
       let orderId = String(body.orderId ?? '').trim();
       if (!orderId) {
@@ -2122,14 +2161,14 @@ async function main() {
           data: {
             orderId,
             source,
-            orderDate,
-            status,
+            orderDate: header.orderDate,
+            status: header.status,
             totalPrice,
             quantity: quantity || 1,
             productName,
-            freight,
-            freightManual: freight != null,
-            paymentType,
+            freight: header.freight,
+            freightManual: header.freight != null,
+            paymentType: header.paymentType,
           },
         });
         for (const line of mergedLines) {
@@ -2165,6 +2204,137 @@ async function main() {
     } catch (e) {
       console.error(e);
       return res.status(500).json({ message: 'Erro ao criar pedido manual.' });
+    }
+  });
+
+  // GET /api/orders/manual/:orderId — detalhe para edição (somente pedidos WhatsApp/manuais)
+  app.get('/api/orders/manual/:orderId', async (req, res) => {
+    try {
+      const orderId = decodeURIComponent(String(req.params.orderId ?? '')).trim();
+      if (!orderId) return res.status(400).json({ message: 'orderId obrigatório.' });
+
+      const order = await (prisma as any).order.findUnique({
+        where: { orderId_source: { orderId, source: SOURCE_ATACADO } },
+        include: {
+          items: {
+            include: {
+              product: {
+                select: { id: true, sku: true, name: true, masterProductId: true, code: true },
+              },
+            },
+          },
+        },
+      });
+      if (!order) return res.status(404).json({ message: 'Pedido não encontrado.' });
+      if (!isManualAtacadoOrder(order)) {
+        return res.status(400).json({ message: 'Este pedido não é uma venda manual WhatsApp.' });
+      }
+
+      return res.status(200).json({
+        orderId: order.orderId,
+        source: order.source,
+        orderDate: order.orderDate.toISOString().slice(0, 10),
+        status: order.status || '',
+        paymentType: order.paymentType ?? '',
+        freight: order.freight ?? null,
+        totalPrice: order.totalPrice,
+        quantity: order.quantity,
+        productName: order.productName,
+        customerName: parseManualCustomerName(order.productName),
+        items: (order.items || []).map((it: any) => ({
+          productCode: it.productCode,
+          name: it.name,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          totalPrice: it.totalPrice,
+          productId: it.productId,
+          masterProductId: it.product?.masterProductId ?? null,
+          sku: it.product?.sku || it.productCode,
+        })),
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao buscar pedido manual.' });
+    }
+  });
+
+  // PUT /api/orders/manual/:orderId — atualiza cabeçalho e substitui itens
+  app.put('/api/orders/manual/:orderId', express.json(), async (req, res) => {
+    try {
+      const orderId = decodeURIComponent(String(req.params.orderId ?? '')).trim();
+      if (!orderId) return res.status(400).json({ message: 'orderId obrigatório.' });
+
+      const existing = await prisma.order.findUnique({
+        where: { orderId_source: { orderId, source: SOURCE_ATACADO } },
+      });
+      if (!existing) return res.status(404).json({ message: 'Pedido não encontrado.' });
+      if (!isManualAtacadoOrder(existing)) {
+        return res.status(400).json({ message: 'Este pedido não é uma venda manual WhatsApp.' });
+      }
+
+      const body = req.body ?? {};
+      const header = parseManualOrderHeader(body);
+      if (!header.ok) return res.status(header.status).json({ message: header.message });
+
+      const resolved = await resolveManualOrderItems(Array.isArray(body.items) ? body.items : []);
+      if (!resolved.ok) return res.status(resolved.status).json({ message: resolved.message });
+
+      const mergedLines = resolved.lines;
+      const itemsTotal = mergedLines.reduce((s, l) => s + l.totalPrice, 0);
+      const totalPrice = Number((itemsTotal + (header.freight || 0)).toFixed(2));
+      const quantity = mergedLines.reduce((s, l) => s + l.quantity, 0);
+      const productName = buildManualProductName(header.customerName, mergedLines);
+
+      await prisma.$transaction(async (tx) => {
+        await (tx as any).orderItem.deleteMany({
+          where: { orderId, source: SOURCE_ATACADO },
+        });
+        await tx.order.update({
+          where: { orderId_source: { orderId, source: SOURCE_ATACADO } },
+          data: {
+            orderDate: header.orderDate,
+            status: header.status,
+            totalPrice,
+            quantity: quantity || 1,
+            productName,
+            freight: header.freight,
+            freightManual: header.freight != null,
+            paymentType: header.paymentType,
+          },
+        });
+        for (const line of mergedLines) {
+          await (tx as any).orderItem.create({
+            data: {
+              orderId,
+              source: SOURCE_ATACADO,
+              productCode: line.productCode,
+              name: line.name,
+              unitPrice: line.unitPrice,
+              quantity: line.quantity,
+              totalPrice: line.totalPrice,
+              discount: 0,
+              sellerDiscount: 0,
+              platformDiscount: 0,
+              productId: line.productId,
+            },
+          });
+        }
+      });
+
+      const updated = await prisma.order.findUnique({
+        where: { orderId_source: { orderId, source: SOURCE_ATACADO } },
+        include: { items: true },
+      });
+
+      return res.status(200).json({
+        ...updated,
+        orderDate: updated?.orderDate?.toISOString(),
+        paymentType: updated?.paymentType ?? '',
+        freight: updated?.freight ?? null,
+      });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ message: 'Erro ao atualizar pedido manual.' });
     }
   });
 

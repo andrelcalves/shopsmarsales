@@ -55,12 +55,21 @@ function App() {
   const [grossRevenueParams, setGrossRevenueParams] = useState<GrossRevenueNavParams | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [atacadoEditOrderId, setAtacadoEditOrderId] = useState<string | null>(null);
 
   function navigateTo(view: AppView) {
     if (view === 'simulation_gross_revenue' && currentView !== 'simulation_gross_revenue') {
       setGrossRevenueParams(null);
     }
+    if (view !== 'atacado_manual') {
+      setAtacadoEditOrderId(null);
+    }
     setCurrentView(view);
+  }
+
+  function openAtacadoEdit(orderId: string) {
+    setAtacadoEditOrderId(orderId);
+    setCurrentView('atacado_manual');
   }
 
   // --- LÓGICA DA TELA DE UPLOAD ---
@@ -368,9 +377,12 @@ function App() {
       ) : currentView === 'returns' ? (
         <Returns />
       ) : currentView === 'orders' ? (
-        <Orders />
+        <Orders onEditManualOrder={openAtacadoEdit} />
       ) : currentView === 'atacado_manual' ? (
-        <AtacadoManualSale />
+        <AtacadoManualSale
+          initialEditOrderId={atacadoEditOrderId}
+          onEditHandled={() => setAtacadoEditOrderId(null)}
+        />
       ) : (
         <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
           {/* Card: Upload */}

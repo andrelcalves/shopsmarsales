@@ -1,5 +1,5 @@
 ﻿import React, { useCallback, useEffect, useState } from "react";
-import { Check, Loader2, Search, X } from "lucide-react";
+import { Check, Loader2, Pencil, Search, X } from "lucide-react";
 
 import { API_URL } from "./config";
 
@@ -25,6 +25,11 @@ function fmtDate(iso: string) {
 function defaultMonth() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function isManualWhatsAppOrder(o: { orderId: string; productName?: string; source: string }) {
+  if (o.source !== "atacado") return false;
+  return o.orderId.startsWith("WA-") || String(o.productName || "").startsWith("[WhatsApp]");
 }
 
 type OrderRow = {
@@ -64,7 +69,11 @@ const sourceBadge: Record<string, string> = {
   tray_varejo: "bg-sky-400 text-slate-900",
 };
 
-export default function Orders() {
+type Props = {
+  onEditManualOrder?: (orderId: string) => void;
+};
+
+export default function Orders({ onEditManualOrder }: Props) {
   const [startMonth, setStartMonth] = useState(defaultMonth());
   const [endMonth, setEndMonth] = useState(defaultMonth());
   const [channel, setChannel] = useState("all");
@@ -189,7 +198,8 @@ export default function Orders() {
         <div>
           <h2 className="text-lg font-black tracking-tight text-slate-900">Pedidos</h2>
           <p className="text-sm text-slate-500 mt-0.5">
-            Liste pedidos por canal e período; edite a forma de pagamento quando necessário.
+            Liste pedidos por canal e período; edite a forma de pagamento. Pedidos WhatsApp do
+            Atacado também podem ser alterados por completo.
           </p>
         </div>
 
@@ -290,6 +300,7 @@ export default function Orders() {
                     <th className="px-3 py-2 text-right">Total</th>
                     <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2 min-w-[220px]">Forma de pagamento</th>
+                    <th className="px-3 py-2 w-24">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -297,6 +308,7 @@ export default function Orders() {
                     const key = rowKey(o);
                     const isEditing = editingKey === key;
                     const isSaving = savingKey === key;
+                    const canEditManual = Boolean(onEditManualOrder) && isManualWhatsAppOrder(o);
                     return (
                       <tr key={key} className="hover:bg-slate-50/80">
                         <td className="px-3 py-2 font-extrabold text-slate-900">{o.orderId}</td>
@@ -364,12 +376,27 @@ export default function Orders() {
                             </button>
                           )}
                         </td>
+                        <td className="px-3 py-2">
+                          {canEditManual ? (
+                            <button
+                              type="button"
+                              onClick={() => onEditManualOrder?.(o.orderId)}
+                              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-sky-700 hover:bg-sky-50"
+                              title="Editar venda WhatsApp"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                              Editar
+                            </button>
+                          ) : (
+                            <span className="text-slate-300">—</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
                   {(data?.orders.length ?? 0) === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                      <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                         Nenhum pedido encontrado.
                       </td>
                     </tr>

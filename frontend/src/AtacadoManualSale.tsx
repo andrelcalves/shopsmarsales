@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, Plus, Search, Trash2, CheckCircle2 } from 'lucide-react';
+import { Loader2, Plus, Search, Trash2, CheckCircle2, Pencil, X } from 'lucide-react';
 
 import { API_URL } from './config';
 import { parseApiJson } from './api';
@@ -16,9 +16,20 @@ function fmtMoney(v: number) {
   return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
+function fmtDate(iso: string) {
+  const d = new Date(iso.includes('T') ? iso : `${iso}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
 function todayISO() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function currentMonth() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
 const FALLBACK_PAYMENT_TYPES = ['Pix', 'Dinheiro', 'Cartão de crédito', 'Cartão de débito', 'Transferência'];
@@ -36,6 +47,7 @@ type MasterItem = {
 type Line = {
   key: string;
   masterProductId: number;
+  productId?: number;
   sku: string;
   name: string;
   stock: number;
@@ -43,7 +55,7 @@ type Line = {
   unitPrice: string;
 };
 
-type CreatedOrder = {
+type SavedOrder = {
   orderId: string;
   totalPrice: number;
   quantity: number;
@@ -51,7 +63,45 @@ type CreatedOrder = {
   productName: string;
 };
 
-export default function AtacadoManualSale() {
+type ManualDetail = {
+  orderId: string;
+  orderDate: string;
+  status: string;
+  paymentType: string;
+  freight: number | null;
+  customerName: string;
+  productName: string;
+  items: Array<{
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    productId: number | null;
+    masterProductId: number | null;
+    sku: string;
+  }>;
+};
+
+type RecentRow = {
+  orderId: string;
+  orderDate: string;
+  productName: string;
+  quantity: number;
+  totalPrice: number;
+  paymentType: string;
+  status: string;
+};
+
+function isManualWhatsAppOrder(o: { orderId: string; productName?: string }) {
+  return o.orderId.startsWith('WA-') || String(o.productName || '').startsWith('[WhatsApp]');
+}
+
+type Props = {
+  initialEditOrderId?: string | null;
+  onEditHandled?: () => void;
+};
+
+export default function AtacadoManualSale({ initialEditOrderId = null, onEditHandled }: Props) {
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [orderDate, setOrderDate] = useState(todayISO());
   const [customerName, setCustomerName] = useState('');
   const [paymentType, setPaymentType] = useState('');
@@ -66,8 +116,12 @@ export default function AtacadoManualSale() {
   const [lines, setLines] = useState<Line[]>([]);
 
   const [submitting, setSubmitting] = useState(false);
+  const [loadingEdit, setLoadingEdit] = useState(false);
   const [error, setError] = useState('');
-  const [created, setCreated] = useState<CreatedOrder | null>(null);
+  const [saved, setSaved] = useState<(SavedOrder & { mode: 'created' | 'updated' }) | null>(null);
+
+  const [recent, setRecent] = useState<RecentRow[]>([]);
+  const [recentLoading, setRecentLoading] = useState(true);
 
   useEffect(() => {
     fetch(`${API_URL}/api/payment-types`)
@@ -107,9 +161,116 @@ export default function AtacadoManualSale() {
     }
   }, []);
 
+  const loadRecent = useCallback(async () => {
+    setRecentLoading(true);
+    try {
+      const month = currentMonth();
+      const qs = new URLSearchParams({
+        channel: 'atacado',
+        start: month,
+        end: month,
+        limit: '50',
+        offset: '0',
+      });
+      const res = await fetch(`${API_URL}/api/orders?${qs.toString()}`);
+      const data = await parseApiJson<{ orders?: RecentRow[] }>(res);
+      const rows = Array.isArray(data.orders) ? data.orders : [];
+      setRecent(rows.filter(isManualWhatsAppOrder).slice(0, 20));
+    } catch {
+      setRecent([]);
+    } finally {
+      setRecentLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadCatalog();
-  }, [loadCatalog]);
+    loadRecent();
+  }, [loadCatalog, loadRecent]);
+
+  const resetForm = useCallback((keepPayment = true) => {
+    setEditingOrderId(null);
+    setOrderDate(todayISO());
+    setCustomerName('');
+    setFreight('');
+    setStatus('Pago');
+    setLines([]);
+    setProductQuery('');
+    setError('');
+    if (!keepPayment) {
+      const pix = paymentTypes.find((t) => t.toLowerCase().includes('pix'));
+      setPaymentType(pix || paymentTypes[0] || 'Pix');
+      setCustomPaymentType('');
+    }
+  }, [paymentTypes]);
+
+  const startEdit = useCallback(
+    async (orderId: string) => {
+      setLoadingEdit(true);
+      setError('');
+      setSaved(null);
+      try {
+        const res = await fetch(`${API_URL}/api/orders/manual/${encodeURIComponent(orderId)}`);
+        const data = await parseApiJson<ManualDetail & { message?: string }>(res);
+        if (!res.ok) throw new Error(data.message || `Erro HTTP ${res.status}`);
+
+        setEditingOrderId(data.orderId);
+        setOrderDate(data.orderDate || todayISO());
+        setCustomerName(data.customerName || '');
+        setStatus(data.status || 'Pago');
+        setFreight(data.freight != null && data.freight > 0 ? String(data.freight) : '');
+
+        const pt = (data.paymentType || '').trim();
+        if (pt && paymentTypes.includes(pt)) {
+          setPaymentType(pt);
+          setCustomPaymentType('');
+        } else if (pt) {
+          setPaymentType('__custom__');
+          setCustomPaymentType(pt);
+        }
+
+        const catalogByMaster = new Map(catalog.map((c) => [c.masterProductId, c]));
+        const nextLines: Line[] = [];
+        for (const it of data.items || []) {
+          let masterId = it.masterProductId;
+          if (!masterId && it.sku) {
+            const bySku = catalog.find((c) => c.sku === it.sku);
+            masterId = bySku?.masterProductId ?? null;
+          }
+          if (!masterId) {
+            throw new Error(
+              `Item "${it.name}" não está vinculado a um produto mestre. Vincule o SKU em Produtos mestre e tente de novo.`,
+            );
+          }
+          const cat = catalogByMaster.get(masterId);
+          nextLines.push({
+            key: `${masterId}-${it.productId || Date.now()}-${Math.random()}`,
+            masterProductId: masterId,
+            productId: it.productId || undefined,
+            sku: it.sku || cat?.sku || '',
+            name: it.name || cat?.name || '',
+            stock: cat?.current ?? 0,
+            quantity: it.quantity,
+            unitPrice: String(it.unitPrice ?? ''),
+          });
+        }
+        setLines(nextLines);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Falha ao carregar pedido.');
+      } finally {
+        setLoadingEdit(false);
+        onEditHandled?.();
+      }
+    },
+    [catalog, paymentTypes, onEditHandled],
+  );
+
+  useEffect(() => {
+    if (!initialEditOrderId) return;
+    if (catalogLoading) return;
+    startEdit(initialEditOrderId);
+  }, [initialEditOrderId, catalogLoading, startEdit]);
 
   const suggestions = useMemo(() => {
     const q = productQuery.trim().toLowerCase();
@@ -165,7 +326,7 @@ export default function AtacadoManualSale() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
-    setCreated(null);
+    setSaved(null);
 
     if (!resolvedPayment) {
       setError('Informe a forma de pagamento.');
@@ -189,38 +350,45 @@ export default function AtacadoManualSale() {
 
     setSubmitting(true);
     try {
-      const res = await fetch(`${API_URL}/api/orders/manual`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderDate,
-          paymentType: resolvedPayment,
-          status,
-          customerName: customerName.trim() || undefined,
-          freight: freight.trim() === '' ? undefined : freightNum,
-          items: lines.map((l) => ({
-            masterProductId: l.masterProductId,
-            quantity: l.quantity,
-            unitPrice: Number(String(l.unitPrice).replace(',', '.')),
-          })),
-        }),
-      });
-      const data = await parseApiJson<CreatedOrder & { message?: string }>(res);
+      const payload = {
+        orderDate,
+        paymentType: resolvedPayment,
+        status,
+        customerName: customerName.trim() || undefined,
+        freight: freight.trim() === '' ? null : freightNum,
+        items: lines.map((l) => ({
+          masterProductId: l.masterProductId,
+          quantity: l.quantity,
+          unitPrice: Number(String(l.unitPrice).replace(',', '.')),
+        })),
+      };
+
+      const isEdit = Boolean(editingOrderId);
+      const res = await fetch(
+        isEdit
+          ? `${API_URL}/api/orders/manual/${encodeURIComponent(editingOrderId!)}`
+          : `${API_URL}/api/orders/manual`,
+        {
+          method: isEdit ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      );
+      const data = await parseApiJson<SavedOrder & { message?: string }>(res);
       if (!res.ok) {
         throw new Error(data.message || `Erro HTTP ${res.status}`);
       }
-      setCreated({
+      setSaved({
         orderId: data.orderId,
         totalPrice: data.totalPrice,
         quantity: data.quantity,
         paymentType: data.paymentType,
         productName: data.productName,
+        mode: isEdit ? 'updated' : 'created',
       });
-      setLines([]);
-      setCustomerName('');
-      setFreight('');
-      setProductQuery('');
+      resetForm();
       loadCatalog();
+      loadRecent();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Falha ao salvar pedido.');
     } finally {
@@ -231,21 +399,47 @@ export default function AtacadoManualSale() {
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 md:px-6 space-y-6">
       <div className={cn(UI.card, 'p-5 md:p-6')}>
-        <h2 className="text-lg font-black tracking-tight text-slate-900">Venda Atacado (WhatsApp)</h2>
-        <p className="mt-1 text-sm text-slate-500">
-          Lance pedidos feitos direto pelo WhatsApp, sem passar pela Nuvemshop. O estoque baixa
-          automaticamente pelos produtos mestre selecionados.
-        </p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-lg font-black tracking-tight text-slate-900">
+              {editingOrderId ? `Editar pedido ${editingOrderId}` : 'Venda Atacado (WhatsApp)'}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {editingOrderId
+                ? 'Altere produtos, quantidades, preços ou pagamento e salve.'
+                : 'Lance pedidos feitos direto pelo WhatsApp. O estoque baixa pelos produtos mestre.'}
+            </p>
+          </div>
+          {editingOrderId && (
+            <button
+              type="button"
+              onClick={() => resetForm()}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+              <X className="h-4 w-4" />
+              Nova venda
+            </button>
+          )}
+        </div>
       </div>
 
-      {created && (
+      {loadingEdit && (
+        <div className={cn(UI.card, 'px-4 py-3 text-sm text-slate-600 flex items-center gap-2')}>
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Carregando pedido…
+        </div>
+      )}
+
+      {saved && (
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex items-start gap-3">
           <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
           <div className="text-sm text-emerald-900">
-            <div className="font-bold">Pedido {created.orderId} criado</div>
+            <div className="font-bold">
+              Pedido {saved.orderId} {saved.mode === 'updated' ? 'atualizado' : 'criado'}
+            </div>
             <div className="mt-0.5">
-              {created.productName} · {created.quantity} un. · {fmtMoney(created.totalPrice)} ·{' '}
-              {created.paymentType}
+              {saved.productName} · {saved.quantity} un. · {fmtMoney(saved.totalPrice)} ·{' '}
+              {saved.paymentType}
             </div>
           </div>
         </div>
@@ -463,13 +657,22 @@ export default function AtacadoManualSale() {
           </div>
         </div>
 
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          {editingOrderId && (
+            <button
+              type="button"
+              onClick={() => resetForm()}
+              className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+          )}
           <button
             type="submit"
-            disabled={submitting || lines.length === 0}
+            disabled={submitting || lines.length === 0 || loadingEdit}
             className={cn(
               'inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-extrabold transition',
-              submitting || lines.length === 0
+              submitting || lines.length === 0 || loadingEdit
                 ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
                 : 'bg-sky-700 text-white hover:bg-sky-800 shadow-sm',
             )}
@@ -479,12 +682,78 @@ export default function AtacadoManualSale() {
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Salvando…
               </>
+            ) : editingOrderId ? (
+              'Salvar alterações'
             ) : (
               'Lançar venda'
             )}
           </button>
         </div>
       </form>
+
+      <div className={cn(UI.card, 'p-5 md:p-6 space-y-4')}>
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400">
+            Pedidos WhatsApp recentes
+          </h3>
+          <button
+            type="button"
+            onClick={() => loadRecent()}
+            className="text-xs font-bold text-sky-700 hover:underline"
+          >
+            Atualizar
+          </button>
+        </div>
+        {recentLoading ? (
+          <p className="text-sm text-slate-500">Carregando…</p>
+        ) : recent.length === 0 ? (
+          <p className="text-sm text-slate-500">Nenhum pedido WhatsApp neste mês.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100">
+                  <th className="pb-2 pr-3">Pedido</th>
+                  <th className="pb-2 pr-3">Data</th>
+                  <th className="pb-2 pr-3">Resumo</th>
+                  <th className="pb-2 pr-3 text-right">Total</th>
+                  <th className="pb-2 w-20" />
+                </tr>
+              </thead>
+              <tbody>
+                {recent.map((o) => (
+                  <tr
+                    key={o.orderId}
+                    className={cn(
+                      'border-b border-slate-50',
+                      editingOrderId === o.orderId && 'bg-sky-50/60',
+                    )}
+                  >
+                    <td className="py-2.5 pr-3 font-bold text-slate-900">{o.orderId}</td>
+                    <td className="py-2.5 pr-3 text-slate-600 tabular-nums">{fmtDate(o.orderDate)}</td>
+                    <td className="py-2.5 pr-3 text-slate-700 max-w-[280px] truncate" title={o.productName}>
+                      {o.productName}
+                    </td>
+                    <td className="py-2.5 pr-3 text-right font-semibold tabular-nums">
+                      {fmtMoney(o.totalPrice)}
+                    </td>
+                    <td className="py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => startEdit(o.orderId)}
+                        className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-sky-700 hover:bg-sky-50"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        Editar
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
